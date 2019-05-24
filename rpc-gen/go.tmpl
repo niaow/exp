@@ -1,0 +1,406 @@
+package {{.GoPackage}}
+
+import (
+    "context"
+    "encoding/json"
+    "net/http"
+    "net/url"
+    "bytes"
+    "io/ioutil"
+    "errors"
+    "fmt"
+)
+
+var _ = bytes.NewReader
+
+{{range (lines .Description) -}}
+// {{.}}
+{{end -}}
+type {{.Name}} interface {
+    {{- range .Operations}}
+        {{range (lines .Description) -}}
+        // {{.}}
+        {{end -}}
+
+        {{- range .Inputs -}}
+            {{- range (lines .Description) -}}
+            // {{.}}
+            {{end}}
+        {{- end -}}
+        {{- range .Outputs -}}
+            {{- range (lines .Description) -}}
+            // {{.}}
+            {{end}}
+        {{- end -}}
+
+        {{- if (ne (len .Errors) 0) -}}
+            // May return{{range .Errors}} {{.}}{{end}}.
+        {{end -}}
+
+        {{.Name}}(ctx context.Context,
+            {{- range .Inputs -}}
+                {{.Name}} {{.Type.GoType}},
+            {{- end}}) (
+                {{- range .Outputs -}}
+                    {{.Name}} {{.Type.GoType}},
+                {{- end -}}
+                err error)
+    {{end}}
+}
+
+{{range .Errors}}
+    {{range (lines .Description) -}}
+    // {{.}}
+    {{end -}}
+    // This corresponds to the HTTP status code {{.Code}} "{{httpcode .Code}}".
+    type {{.Name}} struct {
+        {{- if (ne (len .Fields) 0)}}
+            {{- range .Fields}}
+                {{range (lines .Description) -}}
+                // {{.}}
+                {{end -}}
+
+                {{.Name}} {{.Type.GoType}} `json:"{{.Name}},omitempty"`
+            {{end}}
+        {{end -}}
+    }
+{{end}}
+
+{{range .Errors}}
+    func (err {{.Name}}) Error() string {
+        {{- if (ne (len .Fields) 0)}}
+            dat, merr := json.Marshal(err)
+            if merr != nil {
+                return {{printf "%q" .Text}}
+            }
+
+            return fmt.Sprintf("%s (%s)", {{printf "%q" .Text}}, string(dat[1:len(dat)-1]))
+        {{- else}}
+            return {{printf "%q" .Text}}
+        {{- end}}
+    }
+{{end}}
+
+// rpcError is a container used to transmit errors across http.
+type rpcError struct {
+    Message string `json:"message"`
+    Type string `json:"type,omitempty"`
+    Data interface{} `json:"dat,omitempty"`
+    Code int `json:"-"`
+}
+
+func (re rpcError) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+    msg := re.Message
+    if dat, err := json.Marshal(re); err == nil {
+        msg = string(dat)
+    }
+    http.Error(w, msg, re.Code)
+}
+
+{{range .Errors}}
+    // ServeHTTP sends the error over HTTP.
+    func (err {{.Name}}) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+        rpcError{
+            Message: err.Error(),
+            Type: {{printf "%q" .Name}},
+            Data: err,
+            Code: {{gohttpstatus .Code}},
+        }.ServeHTTP(w, r)
+    }
+{{end}}
+
+// http{{.Name}}Handler is a wrapper around {{.Name}} that implements http.Handler.
+type http{{.Name}}Handler struct {
+    impl {{.Name}}
+    ctxTransform func(context.Context, *http.Request) (context.Context, context.CancelFunc, error)
+    mux *http.ServeMux
+}
+
+{{$sysName := .Name}}
+{{range $i, $op := .Operations}}
+    // handle{{$op.Name}} wraps the implementation's {{$op.Name}} operation and bridges it to HTTP.
+    func (h http{{$sysName}}Handler) handle{{$op.Name}}(w http.ResponseWriter, r *http.Request) {
+        var args struct {
+            {{- range $op.Inputs}}
+                {{.Name}} {{.Type.GoType}} `json:"{{.Name}},omitempty"`
+            {{- end -}}
+        }
+
+        if r.Method != {{gohttpmethod $op.Method}} {
+            rpcError{
+                Message: fmt.Sprintf("unsupported method %q, please use %q", r.Method,{{gohttpmethod $op.Method}}),
+                Code: http.StatusMethodNotAllowed,
+            }.ServeHTTP(w, r)
+            return
+        }
+
+        {{if (eq $op.ArgEncoding "json")}}
+            if err := json.NewDecoder(r.Body).Decode(&args); err != nil {
+                rpcError{
+                    Message: err.Error(),
+                    Code: http.StatusBadRequest,
+                }.ServeHTTP(w, r)
+                return
+            }
+        {{else if (eq $op.ArgEncoding "query")}}
+            q := r.URL.Query()
+            {{range $op.Inputs -}}
+                switch len(q[{{printf "%q" .Name}}]) {
+                case 0:
+                case 1:
+                    if err := json.Unmarshal([]byte(q[{{printf "%q" .Name}}][0]), &args.{{.Name}}); err != nil {
+                        rpcError{
+                            Message: err.Error(),
+                            Code: http.StatusBadRequest,
+                        }.ServeHTTP(w, r)
+                        return
+                    }
+                default:
+                    rpcError{
+                        Message: "argument \"{{.Name}}\" duplicated",
+                        Code: http.StatusBadRequest,
+                    }.ServeHTTP(w, r)
+                    return
+                }
+            {{end}}
+        {{else}}
+        {{end}}
+
+        ctx := r.Context()
+        ctx, cancel := context.WithCancel(ctx)
+        defer cancel()
+        if h.ctxTransform != nil {
+            tctx, tcancel, err := h.ctxTransform(ctx, r)
+            if err != nil {
+                rpcError{
+                    Message: err.Error(),
+                    Code: http.StatusBadRequest,
+                }.ServeHTTP(w, r)
+                return
+            }
+            defer tcancel()
+            ctx = tctx
+        }
+
+        var outputs struct {
+            {{- range $op.Outputs}}
+                {{.Name}} {{.Type.GoType}} `json:"{{.Name}},omitempty"`
+            {{- end}}
+        }
+
+        var err error
+        {{range $op.Outputs}}outputs.{{.Name}}, {{end}}err = h.impl.{{$op.Name}}(ctx{{range $op.Inputs}}, args.{{.Name}}{{end}})
+
+        if err != nil {
+            {{- if (ne (len $op.Errors) 0)}}
+                switch e := err.(type) {
+                    {{- range $op.Errors}}
+                        case {{.}}:
+                            e.ServeHTTP(w, r)
+                    {{- end}}
+                default:
+                    rpcError{
+                        Message: err.Error(),
+                        Code: http.StatusInternalServerError,
+                    }.ServeHTTP(w, r)
+                }
+                return
+            {{else}}
+                rpcError{
+                    Message: err.Error(),
+                    Code: http.StatusInternalServerError,
+                }.ServeHTTP(w, r)
+                return
+            {{end -}}
+        }
+
+        json.NewEncoder(w).Encode(outputs)
+    }
+{{end}}
+
+// ServeHTTP invokes the appropriate handler
+func (h http{{.Name}}Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+    h.mux.ServeHTTP(w, r)
+}
+
+// NewHTTP{{.Name}}Handler creates an http.Handler that wraps a {{.Name}}.
+// If not nil, ctxTransform will be called to transform the context with information from the HTTP request.
+// If the ctxTransform returns an error, the error will be propogated to the client.
+// The cancel function returned by ctxTransform will be invoked after the request completes.
+func NewHTTP{{.Name}}Handler(system {{.Name}}, ctxTransform func(context.Context, *http.Request) (context.Context, context.CancelFunc, error)) http.Handler {
+    mux := http.NewServeMux()
+    h := &http{{.Name}}Handler{
+        impl: system,
+        ctxTransform: ctxTransform,
+        mux: mux,
+    }
+    {{range .Operations}}
+        mux.HandleFunc({{printf "%q" (printf "/%s" .Path)}}, h.handle{{.Name}})
+    {{- end}}
+
+    return h
+}
+
+// {{.Name}}Client is an HTTP client for {{.Name}}, implementing {{.Name}}.
+type {{.Name}}Client struct {
+    // HTTP is the HTTP client which will be used by the {{.Name}}Client to make requests.
+    HTTP *http.Client
+
+    // Base is the base URL of the server.
+    Base *url.URL
+
+    // Contextualize is an optional callback that may be used to add contextual information to the HTTP request.
+    // If Contextualize is not called, the parent context will be inserted into the request.
+    // If present, the Contextualize callback is responsible for configuring request cancellation.
+    Contextualize func(context.Context, *http.Request) (*http.Request, error)
+}
+
+{{range $i, $op := .Operations}}
+    {{range (lines $op.Description) -}}
+    // {{.}}
+    {{end -}}
+
+    {{- range $op.Inputs -}}
+        {{- range (lines .Description) -}}
+        // {{.}}
+        {{end}}
+    {{- end -}}
+    {{- range $op.Outputs -}}
+        {{- range (lines .Description) -}}
+        // {{.}}
+        {{end}}
+    {{- end -}}
+
+    {{- if (ne (len $op.Errors) 0) -}}
+        // May return{{range $op.Errors}} {{.}}{{end}}.
+    {{end -}}
+
+    func (cli *{{$sysName}}Client) {{$op.Name}}(ctx context.Context,
+        {{- range $op.Inputs -}}
+            {{.Name}} {{.Type.GoType}},
+        {{- end}}) (
+            {{- range $op.Outputs -}}
+                {{.Name}} {{.Type.GoType}},
+            {{- end -}}
+            err error) {
+            u, err := cli.Base.Parse({{printf "%q" $op.Path}})
+            if err != nil {
+                return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err
+            }
+            {{if (eq $op.ArgEncoding "json")}}
+                dat, err := json.Marshal(struct {
+                    {{- range $op.Inputs}}
+                        {{.Name}} {{.Type.GoType}} `json:"{{.Name}},omitempty"`
+                    {{- end -}}
+                }{
+                    {{- range $op.Inputs}}
+                        {{.Name}}: {{.Name}},
+                    {{- end}}
+                })
+                if err != nil {
+                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err
+                }
+                req, err := http.NewRequest({{gohttpmethod $op.Method}}, u.String(), bytes.NewReader(dat))
+                if err != nil {
+                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err
+                }
+            {{else if (eq $op.ArgEncoding "query")}}
+                q := u.Query()
+                {{- range $op.Inputs}}
+                    raw{{.Name}}, err := json.Marshal({{.Name}}) {{/* TODO: optimize to simple calls (e.g. strconv.Itoa) */}}
+                    if err != nil {
+                        return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err
+                    }
+                    q.Set({{printf "%q" .Name}}, string(raw{{.Name}}))
+                {{- end}}
+                u.RawQuery = q.Encode()
+
+                req, err := http.NewRequest({{gohttpmethod $op.Method}}, u.String(), nil)
+                if err != nil {
+                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err
+                }
+            {{else}}
+                req, err := http.NewRequest({{gohttpmethod $op.Method}}, u.String(), nil)
+                if err != nil {
+                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err
+                }
+            {{end -}}
+
+            if cli.Contextualize == nil {
+                req = req.WithContext(ctx)
+            } else {
+                cctx, cancel := context.WithCancel(ctx)
+                defer cancel()
+
+                req, err = cli.Contextualize(cctx, req)
+                if err != nil {
+                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err
+                }
+            }
+
+            hcl := cli.HTTP
+            if hcl == nil {
+                hcl = http.DefaultClient
+            }
+            resp, err := hcl.Do(req)
+            if err != nil {
+                return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err
+            }
+            defer resp.Body.Close()
+
+            if resp.StatusCode != http.StatusOK {
+                dat, eerr := ioutil.ReadAll(resp.Body)
+                if eerr != nil {
+                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}errors.New(resp.Status)
+                }
+                var rerr rpcError
+                eerr = json.Unmarshal(dat, &rerr)
+                if eerr != nil {
+                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}errors.New(string(dat))
+                }
+                {{if (ne (len $op.Errors) 0)}}
+                    rmsg := rerr.Message
+                    switch rerr.Type {
+                    {{- range $op.Errors}}
+                    case {{printf "%q" .}}:
+                        rerr.Data = &{{.}}{}
+                    {{end -}}
+                    default:
+                        return {{range $op.Outputs}}{{gozero .Type}}, {{end}}errors.New(rmsg)
+                    }
+                    eerr = json.Unmarshal(dat, &rerr)
+                    if eerr != nil {
+                        return {{range $op.Outputs}}{{gozero .Type}}, {{end}}errors.New(rmsg)
+                    }
+                    decerr, ok := rerr.Data.(error)
+                    if !ok {
+                        return {{range $op.Outputs}}{{gozero .Type}}, {{end}}errors.New(rmsg)
+                    }
+                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}decerr
+                {{else}}
+                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}errors.New(rerr.Message)
+                {{end -}}
+            }
+
+            {{if (ne (len $op.Outputs) 0)}}
+                bdat, err := ioutil.ReadAll(resp.Body)
+                if err != nil {
+                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err
+                }
+
+                var outputs struct {
+                    {{- range $op.Outputs}}
+                        {{.Name}} {{.Type.GoType}} `json:"{{.Name}},omitempty"`
+                    {{- end}}
+                }
+                err = json.Unmarshal(bdat, &outputs)
+                if err != nil {
+                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err
+                }
+
+                return {{range $op.Outputs}}outputs.{{.Name}}, {{end}}nil
+            {{else}}
+                return nil
+            {{end -}}
+    }
+{{end}}
