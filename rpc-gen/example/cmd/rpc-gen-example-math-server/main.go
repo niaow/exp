@@ -5,7 +5,7 @@ import (
 	"flag"
 	"net/http"
 
-	"github.com/jadr2ddude/exp/rpc-gen/test/math"
+	"github.com/jadr2ddude/exp/rpc-gen/example/math"
 )
 
 func main() {
