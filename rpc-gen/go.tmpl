@@ -1,14 +1,14 @@
 package {{.GoPackage}}
 
 import (
+    "bytes"
     "context"
     "encoding/json"
-    "net/http"
-    "net/url"
-    "bytes"
-    "io/ioutil"
     "errors"
     "fmt"
+    "io/ioutil"
+    "net/http"
+    "net/url"
 )
 
 var _ = bytes.NewReader

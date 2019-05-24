@@ -2,9 +2,11 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -335,8 +337,22 @@ var goHTTPStatTbl = map[int]string{
 }
 
 func main() {
+	var spec string
+	var tmplpath string
+	var out string
+	flag.StringVar(&spec, "spec", "", "path to spec to use")
+	flag.StringVar(&tmplpath, "tmpl", "", "path to template to use")
+	flag.StringVar(&out, "o", "", "path to output file")
+	flag.Parse()
+
+	sf, err := os.Open(spec)
+	if err != nil {
+		panic(err)
+	}
+	defer sf.Close()
+
 	var sys System
-	err := yaml.NewDecoder(os.Stdin).Decode(&sys)
+	err = yaml.NewDecoder(sf).Decode(&sys)
 	if err != nil {
 		panic(err)
 	}
@@ -384,11 +400,45 @@ func main() {
 				panic(errors.New("unsupported type"))
 			}
 		},
-	}).ParseFiles(os.Args[1])
+	}).ParseFiles(tmplpath)
 	if err != nil {
 		panic(err)
 	}
-	err = tmpl.ExecuteTemplate(os.Stdout, filepath.Base(os.Args[1]), sys)
+
+	of, err := os.Create(out)
+	if err != nil {
+		panic(err)
+	}
+	defer of.Close()
+
+	cmd := exec.Command("gofmt", "/dev/stdin")
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = of
+	fmw, err := cmd.StdinPipe()
+	if err != nil {
+		panic(err)
+	}
+	defer fmw.Close()
+	err = cmd.Start()
+	if err != nil {
+		panic(err)
+	}
+	defer cmd.Wait()
+	defer fmw.Close()
+
+	err = tmpl.ExecuteTemplate(fmw, filepath.Base(tmplpath), sys)
+	if err != nil {
+		panic(err)
+	}
+	err = fmw.Close()
+	if err != nil {
+		panic(err)
+	}
+	err = cmd.Wait()
+	if err != nil {
+		panic(err)
+	}
+	err = of.Close()
 	if err != nil {
 		panic(err)
 	}
