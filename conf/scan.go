@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"text/scanner"
 )
 
@@ -37,6 +38,29 @@ type PosErr struct {
 	Err error
 }
 
+// ErrUnexpectedToken is error which occurs when an unexpected token is encountered.
+type ErrUnexpectedToken struct {
+	Tok  rune
+	Text string
+}
+
+func (err ErrUnexpectedToken) Error() string {
+	switch err.Tok {
+	case scanner.Int:
+		return fmt.Sprintf("unexpected integer %s", err.Text)
+	case scanner.Float:
+		return fmt.Sprintf("unexpected number %s", err.Text)
+	case scanner.Char:
+		return fmt.Sprintf("unexpected character %s", err.Text)
+	case scanner.String:
+		return fmt.Sprintf("unexpected string %s", err.Text)
+	case scanner.RawString:
+		return fmt.Sprintf("unexpected token %q", err.Text)
+	default:
+		return fmt.Sprintf("unexpected token %q", err.Tok)
+	}
+}
+
 // WrapPos wraps an error at a given position.
 func WrapPos(err error, pos scanner.Position) error {
 	if err == nil {
@@ -49,6 +73,14 @@ func WrapPos(err error, pos scanner.Position) error {
 		Pos: pos,
 		Err: err,
 	}
+}
+
+// Unexpected returns a ErrUnexpectedToken wrapped with an error position for the current token in the Scanner.
+func Unexpected(s Scanner) error {
+	return WrapPos(ErrUnexpectedToken{
+		Tok:  s.Tok(),
+		Text: s.Text(),
+	}, s.Pos())
 }
 
 func (err PosErr) Error() string {
@@ -205,5 +237,24 @@ func ScanSemicolon(parent Scanner, openers []rune, closers []rune) Scanner {
 		Scanner: parent,
 		openers: mapRunes(openers),
 		closers: mapRunes(closers),
+	}
+}
+
+// ScanString reads a string-ish token and returns the fully parsed string.
+// If the token is a raw string, it will return the raw string.
+// If the token is a quoted string, it will be unquoted.
+// If the token is not string-ish, it will return an error.
+func ScanString(scan Scanner) (string, error) {
+	switch scan.Tok() {
+	case scanner.RawString:
+		return scan.Text(), nil
+	case scanner.String:
+		str, err := strconv.Unquote(scan.Text())
+		if err != nil {
+			return "", WrapPos(err, scan.Pos())
+		}
+		return str, nil
+	default:
+		return "", Unexpected(scan)
 	}
 }

@@ -5,18 +5,23 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"text/scanner"
 	"text/template"
 
+	"github.com/jadr2ddude/exp/conf"
 	yaml "gopkg.in/yaml.v2"
 )
 
 // Type is a. . . type?
 type Type interface {
+	fmt.Stringer
+
 	// yummy go syntax
 	GoType() string
 }
@@ -54,6 +59,27 @@ const (
 	StringType  PrimitiveType = "string"
 	StreamType  PrimitiveType = "stream"
 )
+
+// NamedType is a named type as the name implies.
+type NamedType string
+
+func (nt NamedType) String() string {
+	return string(nt)
+}
+
+// GoType returns the Go representation of the type.
+func (nt NamedType) GoType() string {
+	return nt.String()
+}
+
+// ArrayType is a type containing multiple elements of the same underlying type.
+type ArrayType struct {
+	Elem Type
+}
+
+func (at ArrayType) String() string {
+	return "[]" + at.Elem.String()
+}
 
 /*
 // TypeBox is a horrible hack to make yaml work
@@ -116,6 +142,109 @@ type Error struct {
 	Code int `yaml:"code,omitempty"`
 }
 
+func (e *Error) directive(dir string, pos scanner.Position, scan conf.Scanner) error {
+	switch dir {
+	case "name":
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing name argument"), pos)
+		}
+		name, err := conf.ScanString(scan)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		if e.Name != "" {
+			return conf.WrapPos(errors.New("duplicate name directive"), pos)
+		}
+		e.Name = name
+	case "description", "desc":
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing description argument"), pos)
+		}
+		desc, err := conf.ScanString(scan)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		if e.Description == "" {
+			e.Description = desc
+		} else {
+			e.Description += "\n" + desc
+		}
+	case "field", "fields":
+		// TODO
+		return conf.WrapPos(errUnimplemented, pos)
+	case "text":
+		var txtdat string
+		var set bool
+		for scan.Next() {
+			txt := scan.Text()
+			switch scan.Tok() {
+			case scanner.String:
+				dtxt, err := conf.ScanString(scan)
+				if err != nil {
+					return conf.WrapPos(err, pos)
+				}
+				txt = dtxt
+			}
+			if !set {
+				txtdat = txt
+				set = true
+			} else {
+				txtdat += " " + txt
+			}
+		}
+		if err := scan.Err(); err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		if !set {
+			return conf.WrapPos(errors.New("missing text argument"), pos)
+		}
+		if e.Text != "" {
+			return conf.WrapPos(errors.New("duplicate text directive"), pos)
+		}
+		e.Text = txtdat
+		return nil
+	case "code", "httpstatus":
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing code argument"), pos)
+		}
+		switch scan.Tok() {
+		case scanner.Int:
+			code, err := strconv.Atoi(scan.Text())
+			if err != nil {
+				return conf.WrapPos(err, scan.Pos())
+			}
+			if code < 100 || code >= 600 {
+				return conf.WrapPos(fmt.Errorf("illegal http status code %d", code), scan.Pos())
+			}
+			e.Code = code
+		case scanner.Float:
+			return conf.WrapPos(errors.New("fractional http status codes are not a thing"), scan.Pos())
+		default:
+			return conf.Unexpected(scan)
+		}
+	default:
+		return conf.WrapPos(ErrInvalidDirective{dir}, pos)
+	}
+
+	// check for semicolon
+	if scan.Next() {
+		return conf.Unexpected(scan)
+	} else if err := scan.Err(); err != nil {
+		return conf.WrapPos(err, pos)
+	}
+
+	return nil
+}
+
 func (e *Error) prep() error {
 	if e.Name == "" {
 		return errors.New("error misssing name")
@@ -172,6 +301,200 @@ type Op struct {
 
 	// Errors is the set of possible errors which may occur during the operation.
 	Errors []string `yaml:"errors,omitempty"`
+}
+
+func (op *Op) directive(dir string, pos scanner.Position, scan conf.Scanner) error {
+	switch dir {
+	case "name":
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing name argument"), pos)
+		}
+		name, err := conf.ScanString(scan)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		if op.Name != "" {
+			return conf.WrapPos(errors.New("duplicate name directive"), pos)
+		}
+		op.Name = name
+	case "description", "desc":
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing description argument"), pos)
+		}
+		desc, err := conf.ScanString(scan)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		if op.Description == "" {
+			op.Description = desc
+		} else {
+			op.Description += "\n" + desc
+		}
+	case "method":
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing method argument"), pos)
+		}
+		m, err := conf.ScanString(scan)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		m = strings.ToUpper(m)
+		if op.Method != "" {
+			return conf.WrapPos(errors.New("duplicate method directive"), pos)
+		}
+		op.Method = m
+	case "argencoding", "encoding":
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing argument encoding argument"), pos)
+		}
+		enc, err := conf.ScanString(scan)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		switch enc {
+		case "query", "json":
+		default:
+			return conf.WrapPos(fmt.Errorf("invalid argument encoding %q", enc), scan.Pos())
+		}
+		if op.ArgEncoding != "" {
+			return conf.WrapPos(errors.New("duplicate encoding directive"), pos)
+		}
+		op.ArgEncoding = enc
+	case "path":
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing path argument"), pos)
+		}
+		switch scan.Tok() {
+		case scanner.String:
+
+		case scanner.RawString:
+			return conf.WrapPos(errors.New("unqouted paths are potentially dangerous; please quote the path"), scan.Pos())
+		case '/':
+			return conf.WrapPos(errors.New("unexpected token '/'; if this was supposed to be a path then please quote it"), scan.Pos())
+		default:
+			return conf.Unexpected(scan)
+		}
+		path, err := conf.ScanString(scan)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		u, err := url.Parse(path)
+		if err != nil {
+			return conf.WrapPos(err, scan.Pos())
+		}
+		switch {
+		case u.Scheme != "":
+			return conf.WrapPos(errors.New("path contains URL scheme; URL schemes not allowed"), scan.Pos())
+		case u.Fragment != "":
+			return conf.WrapPos(errors.New("path contains URL fragment; URL fragments not allowed"), scan.Pos())
+		case u.Opaque != "":
+			return conf.WrapPos(errors.New("path contains opaque URL data; URL opaque data not allowed"), scan.Pos())
+		case u.User != nil:
+			return conf.WrapPos(errors.New("path contains URL user info; URL user info not allowed"), scan.Pos())
+		case u.Host != "":
+			return conf.WrapPos(errors.New("path contains URL host; expected relative URL"), scan.Pos())
+		case u.RawQuery != "":
+			return conf.WrapPos(errors.New("path contains URL query; query not allowed"), scan.Pos())
+		}
+		if op.Path != "" {
+			return errors.New("duplicate path directive")
+		}
+		op.Path = u.String()
+	case "input", "in":
+		// TODO
+		return conf.WrapPos(errUnimplemented, pos)
+	case "output", "out":
+		// TODO
+		return conf.WrapPos(errUnimplemented, pos)
+	case "error", "err":
+		// TODO
+		return conf.WrapPos(errUnimplemented, pos)
+	default:
+		return conf.WrapPos(ErrInvalidDirective{dir}, pos)
+	}
+
+	// check for semicolon
+	if scan.Next() {
+		return conf.Unexpected(scan)
+	} else if err := scan.Err(); err != nil {
+		return conf.WrapPos(err, pos)
+	}
+
+	return nil
+}
+
+func (op *Op) parse(scan conf.Scanner, pos scanner.Position) error {
+	if !scan.Next() {
+		if err := scan.Err(); err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		return conf.WrapPos(errors.New("missing operation definition"), pos)
+	}
+	switch scan.Tok() {
+	case scanner.RawString, scanner.String:
+		name, err := conf.ScanString(scan)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		op.Name = name
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing operation definition"), pos)
+		}
+		if scan.Tok() != '{' {
+			return conf.Unexpected(scan)
+		}
+	case '{':
+	default:
+		return conf.Unexpected(scan)
+	}
+	bpos := scan.Pos()
+	bscan := conf.ScanBracket(scan, '{', '}')
+	for bscan.Next() {
+		dir, err := conf.ScanString(bscan)
+		if err != nil {
+			return err
+		}
+		dir = strings.ToLower(dir)
+		err = op.directive(dir, bscan.Pos(), conf.ScanSemicolon(bscan, openers, closers))
+		if err != nil {
+			return err
+		}
+	}
+	if bscan.Err() != nil {
+		return conf.WrapPos(bscan.Err(), bpos)
+	}
+
+	// check for semicolon
+	if scan.Next() {
+		return conf.Unexpected(scan)
+	} else if err := scan.Err(); err != nil {
+		return conf.WrapPos(err, pos)
+	}
+
+	err := op.prep()
+	if err != nil {
+		return conf.WrapPos(err, pos)
+	}
+
+	return nil
 }
 
 func (op *Op) prep() error {
@@ -242,6 +565,86 @@ type System struct {
 	Errors []Error `yaml:"errors,omitempty"`
 }
 
+func (s *System) directive(dir string, pos scanner.Position, scan conf.Scanner) error {
+	switch dir {
+	case "name":
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing name argument"), pos)
+		}
+		name, err := conf.ScanString(scan)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		if s.Name != "" {
+			return conf.WrapPos(errors.New("duplicate name directive"), pos)
+		}
+		s.Name = name
+	case "gopackage", "go":
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing GoPackage argument"), pos)
+		}
+		gopkgname, err := conf.ScanString(scan)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		if s.GoPackage != "" {
+			return conf.WrapPos(errors.New("duplicate GoPackage directive"), pos)
+		}
+		s.GoPackage = gopkgname
+	case "description", "desc":
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing description argument"), pos)
+		}
+		desc, err := conf.ScanString(scan)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		if s.Description == "" {
+			s.Description = desc
+		} else {
+			s.Description += "\n" + desc
+		}
+	case "operation", "op":
+		// TODO
+		return conf.WrapPos(errUnimplemented, pos)
+	case "error", "err":
+		// TODO
+		return conf.WrapPos(errUnimplemented, pos)
+	default:
+		return conf.WrapPos(ErrInvalidDirective{dir}, pos)
+	}
+
+	return nil
+}
+
+func (s *System) parse(scan conf.Scanner) error {
+	for scan.Next() {
+		dir, err := conf.ScanString(scan)
+		if err != nil {
+			return err
+		}
+		dir = strings.ToLower(dir)
+		err = s.directive(dir, scan.Pos(), conf.ScanSemicolon(scan, openers, closers))
+		if err != nil {
+			return err
+		}
+	}
+	err := s.prep()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *System) prep() error {
 	if s.Name == "" {
 		return errors.New("system is missing a name")
@@ -271,6 +674,20 @@ func (s *System) prep() error {
 	}
 	return nil
 }
+
+var openers = []rune("({[")
+var closers = []rune(")}]")
+
+// ErrInvalidDirective is an error which occurs when an invalid directive is encountered.
+type ErrInvalidDirective struct {
+	Directive string
+}
+
+func (err ErrInvalidDirective) Error() string {
+	return fmt.Sprintf("invalid directive %q", err.Directive)
+}
+
+var errUnimplemented = errors.New("not yet implemented")
 
 var goHTTPStatTbl = map[int]string{
 	http.StatusOK:                            "http.StatusOK",
