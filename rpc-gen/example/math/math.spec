@@ -20,7 +20,7 @@ op Add {
 
 op Divide {
     desc "Divides two numbers.";
-        encoding json;
+    encoding json;
     in X {
         type uint32;
         desc "X is the dividend.";
