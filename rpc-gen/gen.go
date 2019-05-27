@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,7 +16,6 @@ import (
 	"text/template"
 
 	"github.com/jadr2ddude/exp/conf"
-	yaml "gopkg.in/yaml.v2"
 )
 
 // Type is a. . . type?
@@ -35,11 +35,6 @@ func (pt PrimitiveType) String() string {
 
 func (pt PrimitiveType) GoType() string {
 	return pt.String()
-}
-
-// Marshalyaml marshals the primitive type as yaml.
-func (pt PrimitiveType) Marshalyaml() ([]byte, error) {
-	return []byte("\"" + pt + "\""), nil
 }
 
 // Primitive types
@@ -81,31 +76,157 @@ func (at ArrayType) String() string {
 	return "[]" + at.Elem.String()
 }
 
-/*
-// TypeBox is a horrible hack to make yaml work
-type TypeBox struct {
-	Type
-}
-*/
-
 // Arg is an argument to an Op.
 type Arg struct {
 	// Name is the name of the argument.
-	Name string `yaml:"name"`
+	Name string
 
 	// Type is the type of the argument.
-	Type PrimitiveType `yaml:"type"`
+	Type Type
 
 	// Description is the human-readable description of the argument.
 	// This is *NOT* optional.
-	Description string `yaml:"description"`
+	Description string
+}
+
+func (a *Arg) directive(dir string, pos scanner.Position, scan conf.Scanner) error {
+	switch dir {
+	case "name":
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing name argument"), pos)
+		}
+		name, err := conf.ScanString(scan)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		if a.Name != "" {
+			return conf.WrapPos(errors.New("duplicate name directive"), pos)
+		}
+		a.Name = name
+	case "type":
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing type argument"), pos)
+		}
+		var t Type
+		switch scan.Tok() {
+		case scanner.RawString:
+			tstr := scan.Text()
+			switch PrimitiveType(tstr) {
+			case Uint8Type, Uint16Type, Uint32Type, Uint64Type:
+				fallthrough
+			case Int8Type, Int16Type, Int32Type, Int64Type:
+				fallthrough
+			case Float32Type, Float64Type:
+				fallthrough
+			case BoolType, ByteType, StringType:
+				t = PrimitiveType(tstr)
+			case StreamType:
+				// TODO: streams
+				return conf.WrapPos(errUnimplemented, scan.Pos())
+			default:
+				// TODO: named types
+				return conf.WrapPos(errUnimplemented, scan.Pos())
+			}
+		default:
+			return conf.Unexpected(scan)
+		}
+		if a.Type != nil {
+			return conf.WrapPos(errors.New("duplicate type directive"), pos)
+		}
+		a.Type = t
+	case "description", "desc":
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing description argument"), pos)
+		}
+		desc, err := conf.ScanString(scan)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		if a.Description == "" {
+			a.Description = desc
+		} else {
+			a.Description += "\n" + desc
+		}
+	default:
+		return conf.WrapPos(ErrInvalidDirective{dir}, pos)
+	}
+
+	// check for semicolon
+	if scan.Next() {
+		return conf.Unexpected(scan)
+	} else if err := scan.Err(); err != nil {
+		return conf.WrapPos(err, pos)
+	}
+
+	return nil
+}
+
+func (a *Arg) parse(scan conf.Scanner, pos scanner.Position) error {
+	if !scan.Next() {
+		if err := scan.Err(); err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		return conf.WrapPos(errors.New("missing operation definition"), pos)
+	}
+	switch scan.Tok() {
+	case scanner.RawString, scanner.String:
+		name, err := conf.ScanString(scan)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		a.Name = name
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing operation definition"), pos)
+		}
+		if scan.Tok() != '{' {
+			return conf.Unexpected(scan)
+		}
+	case '{':
+	default:
+		return conf.Unexpected(scan)
+	}
+	bpos := scan.Pos()
+	bscan := conf.ScanBracket(scan, '{', '}')
+	for bscan.Next() {
+		dir, err := conf.ScanString(bscan)
+		if err != nil {
+			return err
+		}
+		dir = strings.ToLower(dir)
+		err = a.directive(dir, bscan.Pos(), conf.ScanSemicolon(bscan, openers, closers))
+		if err != nil {
+			return err
+		}
+	}
+	if bscan.Err() != nil {
+		return conf.WrapPos(bscan.Err(), bpos)
+	}
+
+	err := a.prep()
+	if err != nil {
+		return conf.WrapPos(err, pos)
+	}
+
+	return nil
 }
 
 func (a *Arg) prep() error {
 	if a.Name == "" {
 		return errors.New("argument missing name")
 	}
-	switch a.Type {
+	/*switch a.Type {
 	case "":
 		return fmt.Errorf("argument %q missing type", a.Name)
 	case Uint8Type, Uint16Type, Uint32Type, Uint64Type,
@@ -114,7 +235,7 @@ func (a *Arg) prep() error {
 		BoolType, ByteType, StringType, StreamType:
 	default:
 		return fmt.Errorf("argument %q has invalid type %q", a.Name, a.Type)
-	}
+	}*/
 	if a.Description == "" {
 		return fmt.Errorf("argument %q missing description", a.Name)
 	}
@@ -124,22 +245,22 @@ func (a *Arg) prep() error {
 // Error is a transferrable error.
 type Error struct {
 	// Name is the name of the argument.
-	Name string `yaml:"name"`
+	Name string
 
 	// Fields is the type of the argument.
-	Fields []Arg `yaml:"fields,omitempty"`
+	Fields []Arg
 
 	// Text is the human readable text with which the error is rendered.
 	// Required.
-	Text string `yaml:"text"`
+	Text string
 
 	// Description is the human-readable description of the argument.
 	// This is *NOT* optional.
-	Description string `yaml:"description"`
+	Description string
 
 	// Code is the corresponding HTTP status code.
 	// Defaults to http.StatusInternalServerError.
-	Code int `yaml:"code,omitempty"`
+	Code int
 }
 
 func (e *Error) directive(dir string, pos scanner.Position, scan conf.Scanner) error {
@@ -159,25 +280,13 @@ func (e *Error) directive(dir string, pos scanner.Position, scan conf.Scanner) e
 			return conf.WrapPos(errors.New("duplicate name directive"), pos)
 		}
 		e.Name = name
-	case "description", "desc":
-		if !scan.Next() {
-			if err := scan.Err(); err != nil {
-				return conf.WrapPos(err, pos)
-			}
-			return conf.WrapPos(errors.New("missing description argument"), pos)
-		}
-		desc, err := conf.ScanString(scan)
+	case "field":
+		var a Arg
+		err := a.parse(scan, pos)
 		if err != nil {
 			return conf.WrapPos(err, pos)
 		}
-		if e.Description == "" {
-			e.Description = desc
-		} else {
-			e.Description += "\n" + desc
-		}
-	case "field", "fields":
-		// TODO
-		return conf.WrapPos(errUnimplemented, pos)
+		e.Fields = append(e.Fields, a)
 	case "text":
 		var txtdat string
 		var set bool
@@ -209,6 +318,22 @@ func (e *Error) directive(dir string, pos scanner.Position, scan conf.Scanner) e
 		}
 		e.Text = txtdat
 		return nil
+	case "description", "desc":
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing description argument"), pos)
+		}
+		desc, err := conf.ScanString(scan)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		if e.Description == "" {
+			e.Description = desc
+		} else {
+			e.Description += "\n" + desc
+		}
 	case "code", "httpstatus":
 		if !scan.Next() {
 			if err := scan.Err(); err != nil {
@@ -245,6 +370,58 @@ func (e *Error) directive(dir string, pos scanner.Position, scan conf.Scanner) e
 	return nil
 }
 
+func (e *Error) parse(scan conf.Scanner, pos scanner.Position) error {
+	if !scan.Next() {
+		if err := scan.Err(); err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		return conf.WrapPos(errors.New("missing error definition"), pos)
+	}
+	switch scan.Tok() {
+	case scanner.RawString, scanner.String:
+		name, err := conf.ScanString(scan)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		e.Name = name
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing error definition"), pos)
+		}
+		if scan.Tok() != '{' {
+			return conf.Unexpected(scan)
+		}
+	case '{':
+	default:
+		return conf.Unexpected(scan)
+	}
+	bpos := scan.Pos()
+	bscan := conf.ScanBracket(scan, '{', '}')
+	for bscan.Next() {
+		dir, err := conf.ScanString(bscan)
+		if err != nil {
+			return err
+		}
+		dir = strings.ToLower(dir)
+		err = e.directive(dir, bscan.Pos(), conf.ScanSemicolon(bscan, openers, closers))
+		if err != nil {
+			return err
+		}
+	}
+	if bscan.Err() != nil {
+		return conf.WrapPos(bscan.Err(), bpos)
+	}
+
+	err := e.prep()
+	if err != nil {
+		return conf.WrapPos(err, pos)
+	}
+
+	return nil
+}
+
 func (e *Error) prep() error {
 	if e.Name == "" {
 		return errors.New("error misssing name")
@@ -272,35 +449,35 @@ func (e *Error) prep() error {
 // Op is an HTTP handler RPC endpoint.
 type Op struct {
 	// Name is the name of the opetation.
-	Name string `yaml:"name"`
+	Name string
 
 	// Description is the human-readable description of the operation.
 	// This is *NOT* optional.
-	Description string `yaml:"description"`
+	Description string
 
 	// Method is the HTTP request method.
 	// Defaults to http.MethodHead if there are no inputs or outputs.
 	// Otherwise defaults to http.MethodPost.
-	Method string `yaml:"method,omitempty"`
+	Method string
 
 	// ArgEncoding is an argument encoding system to use.
 	// May be "query" or "json".
 	// Defaults to "json" when the method is http.MethodPost.
 	// Defaults to "query" when the method is http.MethodGet.
-	ArgEncoding string `yaml:"argEncoding,omitempty"`
+	ArgEncoding string
 
 	// Path is the URL path of the endpoint.
 	// Defaults to ".Name".
-	Path string `yaml:"path,omitempty"`
+	Path string
 
 	// Inputs is the set of inputs to the opetation.
-	Inputs []Arg `yaml:"inputs,omitempty"`
+	Inputs []Arg
 
 	// Outputs is the set of outputs of the operation.
-	Outputs []Arg `yaml:"outputs,omitempty"`
+	Outputs []Arg
 
 	// Errors is the set of possible errors which may occur during the operation.
-	Errors []string `yaml:"errors,omitempty"`
+	Errors []string
 }
 
 func (op *Op) directive(dir string, pos scanner.Position, scan conf.Scanner) error {
@@ -416,14 +593,42 @@ func (op *Op) directive(dir string, pos scanner.Position, scan conf.Scanner) err
 		}
 		op.Path = u.String()
 	case "input", "in":
-		// TODO
-		return conf.WrapPos(errUnimplemented, pos)
+		var a Arg
+		err := a.parse(scan, pos)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		op.Inputs = append(op.Inputs, a)
 	case "output", "out":
-		// TODO
-		return conf.WrapPos(errUnimplemented, pos)
-	case "error", "err":
-		// TODO
-		return conf.WrapPos(errUnimplemented, pos)
+		var a Arg
+		err := a.parse(scan, pos)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		op.Outputs = append(op.Outputs, a)
+	case "error", "err", "errors":
+		var hasArg bool
+		for scan.Next() {
+			errname, err := conf.ScanString(scan)
+			if err != nil {
+				return err
+			}
+
+			for _, v := range op.Errors {
+				if errname == v {
+					return conf.WrapPos(fmt.Errorf("duplicate of error specification of %s", errname), scan.Pos())
+				}
+			}
+			op.Errors = append(op.Errors, errname)
+			hasArg = true
+		}
+		if err := scan.Err(); err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		if !hasArg {
+			return conf.WrapPos(errors.New("missing error argument(s)"), pos)
+		}
+		return nil
 	default:
 		return conf.WrapPos(ErrInvalidDirective{dir}, pos)
 	}
@@ -480,13 +685,6 @@ func (op *Op) parse(scan conf.Scanner, pos scanner.Position) error {
 	}
 	if bscan.Err() != nil {
 		return conf.WrapPos(bscan.Err(), bpos)
-	}
-
-	// check for semicolon
-	if scan.Next() {
-		return conf.Unexpected(scan)
-	} else if err := scan.Err(); err != nil {
-		return conf.WrapPos(err, pos)
 	}
 
 	err := op.prep()
@@ -549,20 +747,20 @@ func (op *Op) prep() error {
 // System is a specification of a system exposed over HTTP.
 type System struct {
 	// Name is the name of the system.
-	Name string `yaml:"name"`
+	Name string
 
 	// GoPackage is the equivalent Go package name.
-	GoPackage string `yaml:"goPackage"`
+	GoPackage string
 
 	// Description is the human-readable description of the operation.
 	// This is *NOT* optional.
-	Description string `yaml:"description"`
+	Description string
 
 	// Set of operations for the system.
-	Operations []Op `yaml:"operations"`
+	Operations []Op
 
 	// Error type definitions.
-	Errors []Error `yaml:"errors,omitempty"`
+	Errors []Error
 }
 
 func (s *System) directive(dir string, pos scanner.Position, scan conf.Scanner) error {
@@ -614,13 +812,28 @@ func (s *System) directive(dir string, pos scanner.Position, scan conf.Scanner) 
 			s.Description += "\n" + desc
 		}
 	case "operation", "op":
-		// TODO
-		return conf.WrapPos(errUnimplemented, pos)
+		var op Op
+		err := op.parse(scan, pos)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		s.Operations = append(s.Operations, op)
 	case "error", "err":
-		// TODO
-		return conf.WrapPos(errUnimplemented, pos)
+		var e Error
+		err := e.parse(scan, pos)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		s.Errors = append(s.Errors, e)
 	default:
 		return conf.WrapPos(ErrInvalidDirective{dir}, pos)
+	}
+
+	// check for semicolon
+	if scan.Next() {
+		return conf.Unexpected(scan)
+	} else if err := scan.Err(); err != nil {
+		return conf.WrapPos(err, pos)
 	}
 
 	return nil
@@ -688,6 +901,24 @@ func (err ErrInvalidDirective) Error() string {
 }
 
 var errUnimplemented = errors.New("not yet implemented")
+
+func parseSystem(r io.Reader) (System, error) {
+	gscan := &scanner.Scanner{
+		Mode: scanner.ScanFloats |
+			scanner.ScanStrings | scanner.ScanRawStrings |
+			scanner.ScanComments | scanner.SkipComments,
+	}
+	if f, ok := r.(*os.File); ok {
+		gscan.Position.Filename = f.Name()
+	}
+	scan := conf.Scan(gscan.Init(r))
+
+	var sys System
+	if err := sys.parse(scan); err != nil {
+		return System{}, err
+	}
+	return sys, nil
+}
 
 var goHTTPStatTbl = map[int]string{
 	http.StatusOK:                            "http.StatusOK",
@@ -768,12 +999,7 @@ func main() {
 	}
 	defer sf.Close()
 
-	var sys System
-	err = yaml.NewDecoder(sf).Decode(&sys)
-	if err != nil {
-		panic(err)
-	}
-	err = sys.prep()
+	sys, err := parseSystem(sf)
 	if err != nil {
 		panic(err)
 	}

@@ -57,7 +57,7 @@ func (err ErrUnexpectedToken) Error() string {
 	case scanner.RawString:
 		return fmt.Sprintf("unexpected token %q", err.Text)
 	default:
-		return fmt.Sprintf("unexpected token %q", err.Tok)
+		return fmt.Sprintf("unexpected token %s (%q)", scanner.TokenString(err.Tok), err.Text)
 	}
 }
 
@@ -112,6 +112,9 @@ func (rs *rawScanner) Next() bool {
 		rs.err = io.EOF
 		return false
 	}
+	if rs.tok == scanner.Ident {
+		rs.tok = scanner.RawString
+	}
 	return true
 }
 
@@ -128,7 +131,7 @@ func (rs *rawScanner) Pos() scanner.Position {
 }
 
 func (rs *rawScanner) Err() error {
-	return rs.Err()
+	return rs.err
 }
 
 // Scan wraps a scanner.Scanner into a Scanner.
@@ -208,7 +211,7 @@ func (ss *semicolonScanner) Next() bool {
 	if _, ok := ss.closers[tok]; ok {
 		ss.level--
 	}
-	return false
+	return true
 }
 
 func (ss *semicolonScanner) Err() error {
