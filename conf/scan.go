@@ -109,7 +109,6 @@ func (rs *rawScanner) Next() bool {
 		return false
 	}
 	if rs.tok == scanner.EOF {
-		rs.err = io.EOF
 		return false
 	}
 	if rs.tok == scanner.Ident {

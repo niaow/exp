@@ -49,3 +49,33 @@ err ErrDivideByZero {
     };
     code 400;
 };
+
+type Stats struct {
+    Mean {
+        type float64;
+        desc "Mean is the average of the data in the set";
+    };
+    Stdev {
+        type float64;
+        desc "Stdev is the standard deviation of the data in the set";
+    };
+} "Stats is a set of summative statistics.";
+
+op Statistics {
+    desc "Statistics calculates summative statistics for a set of data";
+    encoding json;
+    in Data []float64 {
+        desc "Data is the data set to be summarized";
+    };
+    out Results Stats {
+        desc "Results are the resulting summary statistics.";
+    };
+    err ErrNoData;
+};
+
+
+err ErrNoData {
+    desc "ErrNoData is an error indicating that no data was provided to summarize.";
+    text "no data provided";
+    code 400;
+};

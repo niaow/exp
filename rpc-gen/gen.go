@@ -76,6 +76,232 @@ func (at ArrayType) String() string {
 	return "[]" + at.Elem.String()
 }
 
+// GoType returns the Go representation of the type.
+func (at ArrayType) GoType() string {
+	return "[]" + at.Elem.GoType()
+}
+
+func (at *ArrayType) parse(scan conf.Scanner, pos scanner.Position, tp typeParser) error {
+	if !scan.Next() {
+		if err := scan.Err(); err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		return conf.WrapPos(errors.New("incomplete array type"), pos)
+	}
+	if scan.Tok() != ']' {
+		return conf.Unexpected(scan)
+	}
+	if !scan.Next() {
+		if err := scan.Err(); err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		return conf.WrapPos(errors.New("incomplete array type"), pos)
+	}
+
+	t, err := tp(scan, scan.Pos())
+	if err != nil {
+		return conf.WrapPos(err, pos)
+	}
+	// TODO: ensure that type is not a stream
+	at.Elem = t
+
+	return nil
+}
+
+// StructType is a type consisting of data fields grouped together.
+type StructType []Arg
+
+func (st StructType) String() string {
+	fields := make([]string, len(st))
+	for i, a := range st {
+		fields[i] = "\t" + strings.Replace(fmt.Sprintf("// %s\n%s %s",
+			strings.Replace(a.Description, "\n", "\n// ", -1),
+			a.Name, a.Type.String(),
+		), "\n", "\n\t", -1)
+	}
+	return fmt.Sprintf("struct {\n\t%s\n}", strings.Join(fields, "\n\n\t"))
+}
+
+// GoType returns the Go representation of the type.
+func (st StructType) GoType() string {
+	fields := make([]string, len(st))
+	for i, a := range st {
+		fields[i] = "\t" + strings.Replace(fmt.Sprintf("// %s\n%s %s `json:\"%s,omitempty\"`",
+			strings.Replace(a.Description, "\n", "\n// ", -1),
+			a.Name, a.Type.GoType(), a.Name,
+		), "\n", "\n\t", -1)
+	}
+	return fmt.Sprintf("struct {\n\t%s\n}", strings.Join(fields, "\n\n\t"))
+}
+
+func (st *StructType) parse(scan conf.Scanner, pos scanner.Position) error {
+	if !scan.Next() {
+		if err := scan.Err(); err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		return conf.WrapPos(errors.New("missing struct definition"), pos)
+	}
+
+	if scan.Tok() != '{' {
+		return conf.Unexpected(scan)
+	}
+	bscan := conf.ScanBracket(scan, '{', '}')
+
+	for bscan.Next() {
+		sscan := conf.ScanSemicolon(bscan, openers, closers)
+		var a Arg
+		err := a.parse(sscan, pos, true, parseTypeNamed)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+
+		// check for semicolon
+		if sscan.Next() {
+			return conf.Unexpected(sscan)
+		} else if err := scan.Err(); err != nil {
+			return conf.WrapPos(err, pos)
+		}
+
+		*st = append(*st, a)
+	}
+	if err := bscan.Err(); err != nil {
+		return conf.WrapPos(err, pos)
+	}
+
+	if len(*st) == 0 {
+		*st = StructType{}
+	}
+
+	return nil
+}
+
+type typeParser func(conf.Scanner, scanner.Position) (Type, error)
+
+func parseTypeInline(scan conf.Scanner, pos scanner.Position) (Type, error) {
+	switch scan.Tok() {
+	case scanner.RawString:
+		tstr := scan.Text()
+		switch PrimitiveType(tstr) {
+		case Uint8Type, Uint16Type, Uint32Type, Uint64Type:
+			fallthrough
+		case Int8Type, Int16Type, Int32Type, Int64Type:
+			fallthrough
+		case Float32Type, Float64Type:
+			fallthrough
+		case BoolType, ByteType, StringType:
+			return PrimitiveType(tstr), nil
+		case StreamType:
+			// TODO: streams
+			return nil, conf.WrapPos(errUnimplemented, scan.Pos())
+		default:
+			if tstr == "struct" {
+				return nil, conf.WrapPos(errors.New("structs not allowed inline"), pos)
+			}
+			return NamedType(tstr), nil
+		}
+	case '[':
+		var at ArrayType
+		if err := at.parse(scan, pos, parseTypeInline); err != nil {
+			return nil, err
+		}
+		return at, nil
+	default:
+		return nil, conf.Unexpected(scan)
+	}
+}
+
+func parseTypeNamed(scan conf.Scanner, pos scanner.Position) (Type, error) {
+	switch scan.Tok() {
+	case scanner.RawString:
+		tstr := scan.Text()
+		switch PrimitiveType(tstr) {
+		case Uint8Type, Uint16Type, Uint32Type, Uint64Type:
+			fallthrough
+		case Int8Type, Int16Type, Int32Type, Int64Type:
+			fallthrough
+		case Float32Type, Float64Type:
+			fallthrough
+		case BoolType, ByteType, StringType:
+			return PrimitiveType(tstr), nil
+		case StreamType:
+			return nil, conf.WrapPos(errors.New("streams may not be stored in a compound type"), scan.Pos())
+		default:
+			if tstr == "struct" {
+				var st StructType
+				if err := st.parse(scan, pos); err != nil {
+					return nil, err
+				}
+				return st, nil
+			}
+			return NamedType(tstr), nil
+		}
+	case '[':
+		var at ArrayType
+		if err := at.parse(scan, pos, parseTypeNamed); err != nil {
+			return nil, err
+		}
+		return at, nil
+	default:
+		return nil, conf.Unexpected(scan)
+	}
+}
+
+// TypeDef is a named type definition.
+type TypeDef struct {
+	// Name is the name of the type.
+	Name string
+
+	// Type is the underlying type.
+	Type Type
+
+	// Description is a human-readable description of the type.
+	Description string
+}
+
+func parseTypeDef(scan conf.Scanner, pos scanner.Position) (TypeDef, error) {
+	if !scan.Next() {
+		if err := scan.Err(); err != nil {
+			return TypeDef{}, conf.WrapPos(err, pos)
+		}
+		return TypeDef{}, conf.WrapPos(errors.New("missing type name"), pos)
+	}
+	if scan.Tok() != scanner.RawString {
+		return TypeDef{}, conf.Unexpected(scan)
+	}
+	name, err := conf.ScanString(scan)
+	if err != nil {
+		return TypeDef{}, conf.WrapPos(err, pos)
+	}
+
+	if !scan.Next() {
+		if err := scan.Err(); err != nil {
+			return TypeDef{}, conf.WrapPos(err, pos)
+		}
+		return TypeDef{}, conf.WrapPos(errors.New("missing underlying type"), pos)
+	}
+	t, err := parseTypeNamed(scan, scan.Pos())
+	if err != nil {
+		return TypeDef{}, conf.WrapPos(err, pos)
+	}
+
+	if !scan.Next() {
+		if err := scan.Err(); err != nil {
+			return TypeDef{}, conf.WrapPos(err, pos)
+		}
+		return TypeDef{}, conf.WrapPos(errors.New("missing type description"), pos)
+	}
+	desc, err := conf.ScanString(scan)
+	if err != nil {
+		return TypeDef{}, conf.WrapPos(err, pos)
+	}
+
+	return TypeDef{
+		Name:        name,
+		Type:        t,
+		Description: desc,
+	}, nil
+}
+
 // Arg is an argument to an Op.
 type Arg struct {
 	// Name is the name of the argument.
@@ -89,7 +315,7 @@ type Arg struct {
 	Description string
 }
 
-func (a *Arg) directive(dir string, pos scanner.Position, scan conf.Scanner) error {
+func (a *Arg) directive(dir string, pos scanner.Position, scan conf.Scanner, tp typeParser) error {
 	switch dir {
 	case "name":
 		if !scan.Next() {
@@ -113,31 +339,9 @@ func (a *Arg) directive(dir string, pos scanner.Position, scan conf.Scanner) err
 			}
 			return conf.WrapPos(errors.New("missing type argument"), pos)
 		}
-		var t Type
-		switch scan.Tok() {
-		case scanner.RawString:
-			tstr := scan.Text()
-			switch PrimitiveType(tstr) {
-			case Uint8Type, Uint16Type, Uint32Type, Uint64Type:
-				fallthrough
-			case Int8Type, Int16Type, Int32Type, Int64Type:
-				fallthrough
-			case Float32Type, Float64Type:
-				fallthrough
-			case BoolType, ByteType, StringType:
-				t = PrimitiveType(tstr)
-			case StreamType:
-				// TODO: streams
-				return conf.WrapPos(errUnimplemented, scan.Pos())
-			default:
-				// TODO: named types
-				return conf.WrapPos(errUnimplemented, scan.Pos())
-			}
-		default:
-			return conf.Unexpected(scan)
-		}
-		if a.Type != nil {
-			return conf.WrapPos(errors.New("duplicate type directive"), pos)
+		t, err := tp(scan, scan.Pos())
+		if err != nil {
+			return conf.WrapPos(err, pos)
 		}
 		a.Type = t
 	case "description", "desc":
@@ -170,12 +374,14 @@ func (a *Arg) directive(dir string, pos scanner.Position, scan conf.Scanner) err
 	return nil
 }
 
-func (a *Arg) parse(scan conf.Scanner, pos scanner.Position) error {
-	if !scan.Next() {
-		if err := scan.Err(); err != nil {
-			return conf.WrapPos(err, pos)
+func (a *Arg) parse(scan conf.Scanner, pos scanner.Position, nostart bool, tp typeParser) error {
+	if !nostart {
+		if !scan.Next() {
+			if err := scan.Err(); err != nil {
+				return conf.WrapPos(err, pos)
+			}
+			return conf.WrapPos(errors.New("missing definition"), pos)
 		}
-		return conf.WrapPos(errors.New("missing operation definition"), pos)
 	}
 	switch scan.Tok() {
 	case scanner.RawString, scanner.String:
@@ -188,10 +394,24 @@ func (a *Arg) parse(scan conf.Scanner, pos scanner.Position) error {
 			if err := scan.Err(); err != nil {
 				return conf.WrapPos(err, pos)
 			}
-			return conf.WrapPos(errors.New("missing operation definition"), pos)
+			return conf.WrapPos(errors.New("missing definition"), pos)
 		}
 		if scan.Tok() != '{' {
-			return conf.Unexpected(scan)
+			t, err := tp(scan, scan.Pos())
+			if err != nil {
+				return err
+			}
+			a.Type = t
+
+			if !scan.Next() {
+				if err := scan.Err(); err != nil {
+					return conf.WrapPos(err, pos)
+				}
+				return conf.WrapPos(errors.New("missing definition"), pos)
+			}
+			if scan.Tok() != '{' {
+				return conf.Unexpected(scan)
+			}
 		}
 	case '{':
 	default:
@@ -205,7 +425,7 @@ func (a *Arg) parse(scan conf.Scanner, pos scanner.Position) error {
 			return err
 		}
 		dir = strings.ToLower(dir)
-		err = a.directive(dir, bscan.Pos(), conf.ScanSemicolon(bscan, openers, closers))
+		err = a.directive(dir, bscan.Pos(), conf.ScanSemicolon(bscan, openers, closers), tp)
 		if err != nil {
 			return err
 		}
@@ -282,7 +502,7 @@ func (e *Error) directive(dir string, pos scanner.Position, scan conf.Scanner) e
 		e.Name = name
 	case "field":
 		var a Arg
-		err := a.parse(scan, pos)
+		err := a.parse(scan, pos, false, parseTypeInline)
 		if err != nil {
 			return conf.WrapPos(err, pos)
 		}
@@ -594,14 +814,14 @@ func (op *Op) directive(dir string, pos scanner.Position, scan conf.Scanner) err
 		op.Path = u.String()
 	case "input", "in":
 		var a Arg
-		err := a.parse(scan, pos)
+		err := a.parse(scan, pos, false, parseTypeInline)
 		if err != nil {
 			return conf.WrapPos(err, pos)
 		}
 		op.Inputs = append(op.Inputs, a)
 	case "output", "out":
 		var a Arg
-		err := a.parse(scan, pos)
+		err := a.parse(scan, pos, false, parseTypeInline)
 		if err != nil {
 			return conf.WrapPos(err, pos)
 		}
@@ -756,11 +976,23 @@ type System struct {
 	// This is *NOT* optional.
 	Description string
 
+	// Set of named type definitions.
+	Types []TypeDef
+
 	// Set of operations for the system.
 	Operations []Op
 
 	// Error type definitions.
 	Errors []Error
+}
+
+func (s *System) typeByName(name string) Type {
+	for _, t := range s.Types {
+		if t.Name == name {
+			return t.Type
+		}
+	}
+	return nil
 }
 
 func (s *System) directive(dir string, pos scanner.Position, scan conf.Scanner) error {
@@ -811,6 +1043,12 @@ func (s *System) directive(dir string, pos scanner.Position, scan conf.Scanner) 
 		} else {
 			s.Description += "\n" + desc
 		}
+	case "type":
+		td, err := parseTypeDef(scan, pos)
+		if err != nil {
+			return conf.WrapPos(err, pos)
+		}
+		s.Types = append(s.Types, td)
 	case "operation", "op":
 		var op Op
 		err := op.parse(scan, pos)
@@ -851,6 +1089,9 @@ func (s *System) parse(scan conf.Scanner) error {
 			return err
 		}
 	}
+	if err := scan.Err(); err != nil {
+		return err
+	}
 	err := s.prep()
 	if err != nil {
 		return err
@@ -870,6 +1111,9 @@ func (s *System) prep() error {
 	}
 	if len(s.Operations) == 0 {
 		return errors.New("system has no operations")
+	}
+	if s.Types == nil {
+		s.Types = []TypeDef{}
 	}
 	for i := range s.Operations {
 		if err := s.Operations[i].prep(); err != nil {
@@ -1029,6 +1273,7 @@ func main() {
 			return str
 		},
 		"gozero": func(t Type) string {
+		start:
 			switch t {
 			case Uint8Type, Uint16Type, Uint32Type, Uint64Type,
 				Int8Type, Int16Type, Int32Type, Int64Type, ByteType:
@@ -1040,7 +1285,29 @@ func main() {
 			case StringType:
 				return `""`
 			default:
-				panic(errors.New("unsupported type"))
+				switch rt := t.(type) {
+				case ArrayType:
+					return rt.GoType() + "{}"
+				case NamedType:
+					ut := sys.typeByName(string(rt))
+				nameproc:
+					switch ut.(type) {
+					case PrimitiveType:
+						t = ut
+						goto start
+					case ArrayType:
+						return rt.GoType() + "{}"
+					case StructType:
+						return rt.GoType() + "{}"
+					case NamedType:
+						ut = sys.typeByName(string(ut.(NamedType)))
+						goto nameproc
+					default:
+						panic(errors.New("unsupported type"))
+					}
+				default:
+					panic(errors.New("unsupported type"))
+				}
 			}
 		},
 	}).ParseFiles(tmplpath)

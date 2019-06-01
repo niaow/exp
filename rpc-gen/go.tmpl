@@ -48,6 +48,13 @@ type {{.Name}} interface {
     {{end}}
 }
 
+{{range .Types}}
+    {{range (lines .Description) -}}
+    // {{.}}
+    {{end -}}
+    type {{.Name}} {{.Type.GoType}}
+{{end}}
+
 {{range .Errors}}
     {{range (lines .Description) -}}
     // {{.}}

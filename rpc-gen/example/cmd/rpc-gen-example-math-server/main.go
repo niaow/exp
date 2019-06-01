@@ -5,6 +5,8 @@ import (
 	"flag"
 	"net/http"
 
+	gomath "math"
+
 	"github.com/jadr2ddude/exp/rpc-gen/example/math"
 )
 
@@ -26,4 +28,28 @@ func (m maff) Divide(ctx context.Context, x uint32, y uint32) (quotient uint32, 
 		return 0, 0, math.ErrDivideByZero{Dividend: x}
 	}
 	return x / y, x % y, nil
+}
+
+func (m maff) Statistics(ctx context.Context, data []float64) (res math.Stats, err error) {
+	if len(data) == 0 {
+		return math.Stats{}, math.ErrNoData{}
+	}
+
+	var sum float64
+	for _, v := range data {
+		sum += v
+	}
+	mean := sum / float64(len(data))
+
+	var sqerrs float64
+	for _, v := range data {
+		errv := v - mean
+		sqerrs += errv * errv
+	}
+	stdev := gomath.Sqrt(sqerrs / float64(len(data)))
+
+	return math.Stats{
+		Mean:  mean,
+		Stdev: stdev,
+	}, nil
 }

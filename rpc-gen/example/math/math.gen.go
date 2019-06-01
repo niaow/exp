@@ -28,6 +28,21 @@ type Math interface {
 	// Remainder is the remainder of the division.
 	// May return ErrDivideByZero.
 	Divide(ctx context.Context, X uint32, Y uint32) (Quotient uint32, Remainder uint32, err error)
+
+	// Statistics calculates summative statistics for a set of data
+	// Data is the data set to be summarized
+	// Results are the resulting summary statistics.
+	// May return ErrNoData.
+	Statistics(ctx context.Context, Data []float64) (Results Stats, err error)
+}
+
+// Stats is a set of summative statistics.
+type Stats struct {
+	// Mean is the average of the data in the set
+	Mean float64 `json:"Mean,omitempty"`
+
+	// Stdev is the standard deviation of the data in the set
+	Stdev float64 `json:"Stdev,omitempty"`
 }
 
 // ErrDivideByZero is an error resulting from a division with a zero divisor.
@@ -37,6 +52,10 @@ type ErrDivideByZero struct {
 	Dividend uint32 `json:"Dividend,omitempty"`
 }
 
+// ErrNoData is an error indicating that no data was provided to summarize.
+// This corresponds to the HTTP status code 400 "Bad Request".
+type ErrNoData struct{}
+
 func (err ErrDivideByZero) Error() string {
 	dat, merr := json.Marshal(err)
 	if merr != nil {
@@ -44,6 +63,10 @@ func (err ErrDivideByZero) Error() string {
 	}
 
 	return fmt.Sprintf("%s (%s)", "division by zero", string(dat[1:len(dat)-1]))
+}
+
+func (err ErrNoData) Error() string {
+	return "no data provided"
 }
 
 // rpcError is a container used to transmit errors across http.
@@ -67,6 +90,16 @@ func (err ErrDivideByZero) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rpcError{
 		Message: err.Error(),
 		Type:    "ErrDivideByZero",
+		Data:    err,
+		Code:    http.StatusBadRequest,
+	}.ServeHTTP(w, r)
+}
+
+// ServeHTTP sends the error over HTTP.
+func (err ErrNoData) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	rpcError{
+		Message: err.Error(),
+		Type:    "ErrNoData",
 		Data:    err,
 		Code:    http.StatusBadRequest,
 	}.ServeHTTP(w, r)
@@ -227,6 +260,67 @@ func (h httpMathHandler) handleDivide(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(outputs)
 }
 
+// handleStatistics wraps the implementation's Statistics operation and bridges it to HTTP.
+func (h httpMathHandler) handleStatistics(w http.ResponseWriter, r *http.Request) {
+	var args struct {
+		Data []float64 `json:"Data,omitempty"`
+	}
+
+	if r.Method != http.MethodPost {
+		rpcError{
+			Message: fmt.Sprintf("unsupported method %q, please use %q", r.Method, http.MethodPost),
+			Code:    http.StatusMethodNotAllowed,
+		}.ServeHTTP(w, r)
+		return
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&args); err != nil {
+		rpcError{
+			Message: err.Error(),
+			Code:    http.StatusBadRequest,
+		}.ServeHTTP(w, r)
+		return
+	}
+
+	ctx := r.Context()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if h.ctxTransform != nil {
+		tctx, tcancel, err := h.ctxTransform(ctx, r)
+		if err != nil {
+			rpcError{
+				Message: err.Error(),
+				Code:    http.StatusBadRequest,
+			}.ServeHTTP(w, r)
+			return
+		}
+		defer tcancel()
+		ctx = tctx
+	}
+
+	var outputs struct {
+		Results Stats `json:"Results,omitempty"`
+	}
+
+	var err error
+	outputs.Results, err = h.impl.Statistics(ctx, args.Data)
+
+	if err != nil {
+		switch e := err.(type) {
+		case ErrNoData:
+			e.ServeHTTP(w, r)
+		default:
+			rpcError{
+				Message: err.Error(),
+				Code:    http.StatusInternalServerError,
+			}.ServeHTTP(w, r)
+		}
+		return
+	}
+
+	json.NewEncoder(w).Encode(outputs)
+}
+
 // ServeHTTP invokes the appropriate handler
 func (h httpMathHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
@@ -246,6 +340,7 @@ func NewHTTPMathHandler(system Math, ctxTransform func(context.Context, *http.Re
 
 	mux.HandleFunc("/Add", h.handleAdd)
 	mux.HandleFunc("/Divide", h.handleDivide)
+	mux.HandleFunc("/Statistics", h.handleStatistics)
 
 	return h
 }
@@ -435,4 +530,93 @@ func (cli *MathClient) Divide(ctx context.Context, X uint32, Y uint32) (Quotient
 	}
 
 	return outputs.Quotient, outputs.Remainder, nil
+}
+
+// Statistics calculates summative statistics for a set of data
+// Data is the data set to be summarized
+// Results are the resulting summary statistics.
+// May return ErrNoData.
+func (cli *MathClient) Statistics(ctx context.Context, Data []float64) (Results Stats, err error) {
+	u, err := cli.Base.Parse("Statistics")
+	if err != nil {
+		return Stats{}, err
+	}
+
+	dat, err := json.Marshal(struct {
+		Data []float64 `json:"Data,omitempty"`
+	}{
+		Data: Data,
+	})
+	if err != nil {
+		return Stats{}, err
+	}
+	req, err := http.NewRequest(http.MethodPost, u.String(), bytes.NewReader(dat))
+	if err != nil {
+		return Stats{}, err
+	}
+	if cli.Contextualize == nil {
+		req = req.WithContext(ctx)
+	} else {
+		cctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		req, err = cli.Contextualize(cctx, req)
+		if err != nil {
+			return Stats{}, err
+		}
+	}
+
+	hcl := cli.HTTP
+	if hcl == nil {
+		hcl = http.DefaultClient
+	}
+	resp, err := hcl.Do(req)
+	if err != nil {
+		return Stats{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		dat, eerr := ioutil.ReadAll(resp.Body)
+		if eerr != nil {
+			return Stats{}, errors.New(resp.Status)
+		}
+		var rerr rpcError
+		eerr = json.Unmarshal(dat, &rerr)
+		if eerr != nil {
+			return Stats{}, errors.New(string(dat))
+		}
+
+		rmsg := rerr.Message
+		switch rerr.Type {
+		case "ErrNoData":
+			rerr.Data = &ErrNoData{}
+		default:
+			return Stats{}, errors.New(rmsg)
+		}
+		eerr = json.Unmarshal(dat, &rerr)
+		if eerr != nil {
+			return Stats{}, errors.New(rmsg)
+		}
+		decerr, ok := rerr.Data.(error)
+		if !ok {
+			return Stats{}, errors.New(rmsg)
+		}
+		return Stats{}, decerr
+	}
+
+	bdat, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return Stats{}, err
+	}
+
+	var outputs struct {
+		Results Stats `json:"Results,omitempty"`
+	}
+	err = json.Unmarshal(bdat, &outputs)
+	if err != nil {
+		return Stats{}, err
+	}
+
+	return outputs.Results, nil
 }
