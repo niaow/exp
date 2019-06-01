@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"text/scanner"
 )
 
@@ -136,6 +137,84 @@ func (rs *rawScanner) Err() error {
 // Scan wraps a scanner.Scanner into a Scanner.
 func Scan(s *scanner.Scanner) Scanner {
 	return (&rawScanner{s: s}).scanConf()
+}
+
+type asiScanner struct {
+	s        Scanner
+	tok      rune
+	txt      string
+	pos      scanner.Position
+	inserted bool
+	end      bool
+}
+
+func (as *asiScanner) Next() bool {
+	if as.end {
+		return false
+	}
+	if as.inserted {
+		as.tok, as.txt, as.pos = as.s.Tok(), as.s.Text(), as.s.Pos()
+		as.inserted = false
+		return true
+	}
+	if !as.s.Next() {
+		as.end = true
+		switch as.tok {
+		case ';', 0:
+		default:
+			as.tok, as.txt, as.inserted = ';', ";", true
+			return true
+		}
+		return false
+	}
+	switch as.s.Tok() {
+	case '}', ']', ')':
+		if as.tok != ';' && strings.Index("{[(", as.txt) != strings.Index(")]}", as.s.Text()) {
+			as.tok, as.txt, as.inserted = ';', ";", true
+			return true
+		}
+		fallthrough
+	default:
+		switch as.tok {
+		case ';', 0:
+			// nothing before
+		case '{', '[', '(':
+			// opening of a bracket - continues onto next line possibly
+		default:
+			if as.s.Pos().Line > as.pos.Line {
+				as.tok, as.txt, as.inserted = ';', ";", true
+				return true
+			}
+		}
+		fallthrough
+	case ';':
+		as.tok, as.txt, as.pos = as.s.Tok(), as.s.Text(), as.s.Pos()
+		return true
+	}
+}
+
+func (as *asiScanner) Tok() rune {
+	return as.tok
+}
+
+func (as *asiScanner) Text() string {
+	return as.txt
+}
+
+func (as *asiScanner) Pos() scanner.Position {
+	return as.pos
+}
+
+func (as *asiScanner) Err() error {
+	if as.inserted {
+		return nil
+	}
+	return as.s.Err()
+}
+
+// AutoSemicolon returns a scanner which automatically inserts semicolons into the token stream from the parent.
+func AutoSemicolon(parent Scanner) Scanner {
+	return &asiScanner{s: parent}
 }
 
 type bracketScanner struct {

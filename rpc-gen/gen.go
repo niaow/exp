@@ -1156,6 +1156,7 @@ func parseSystem(r io.Reader) (System, error) {
 		gscan.Position.Filename = f.Name()
 	}
 	scan := conf.Scan(gscan.Init(r))
+	scan = conf.AutoSemicolon(scan)
 
 	var sys System
 	if err := sys.parse(scan); err != nil {
