@@ -74,3 +74,16 @@ err ErrNoData {
     text "no data provided"
     code 400
 }
+
+
+op Sum {
+    desc "Sum adds a stream of numbers together."
+    in Numbers stream float64 { desc "Numbers is the stream of numbers to sum." }
+    out Result float64 { desc "Result is the final sum." }
+}
+
+op Factor {
+    desc "Factor computes the prime factors of an integer."
+    in Composite uint64 { desc "Composite is the number to factor." }
+    out Factors stream uint64 { desc "Factors are the prime factors found." }
+}

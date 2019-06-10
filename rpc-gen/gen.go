@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"text/scanner"
@@ -52,7 +53,6 @@ const (
 	BoolType    PrimitiveType = "bool"
 	ByteType    PrimitiveType = "byte"
 	StringType  PrimitiveType = "string"
-	StreamType  PrimitiveType = "stream"
 )
 
 // NamedType is a named type as the name implies.
@@ -102,7 +102,9 @@ func (at *ArrayType) parse(scan conf.Scanner, pos scanner.Position, tp typeParse
 	if err != nil {
 		return conf.WrapPos(err, pos)
 	}
-	// TODO: ensure that type is not a stream
+	if _, ok := t.(StreamType); ok {
+		return conf.WrapPos(errors.New("streams may not be stored in a compound type"), scan.Pos())
+	}
 	at.Elem = t
 
 	return nil
@@ -175,6 +177,40 @@ func (st *StructType) parse(scan conf.Scanner, pos scanner.Position) error {
 	return nil
 }
 
+// StreamType is a psuedo-type used to represent a stream of values which do not fit in memory.
+type StreamType struct {
+	Elem Type
+}
+
+func (st StreamType) String() string {
+	return fmt.Sprintf("stream %s", st.Elem.String())
+}
+
+// GoType is not valid, as streams are not really types.
+func (st StreamType) GoType() string {
+	panic(errors.New("this makes no sense"))
+}
+
+func parseStream(scan conf.Scanner, pos scanner.Position) (Type, error) {
+	if !scan.Next() {
+		if err := scan.Err(); err != nil {
+			return nil, conf.WrapPos(err, pos)
+		}
+		return nil, conf.WrapPos(errors.New("missing stream element type"), pos)
+	}
+	et, err := parseTypeInline(scan, scan.Pos())
+	if err != nil {
+		return nil, conf.WrapPos(err, pos)
+	}
+	if _, ok := et.(StreamType); ok {
+		return nil, conf.WrapPos(errors.New("nested stream types do not make sense"), pos)
+	}
+	return StreamType{et}, nil
+}
+
+// ByteStream is a special type of stream which sends raw data over http.
+var ByteStream = StreamType{ByteType}
+
 type typeParser func(conf.Scanner, scanner.Position) (Type, error)
 
 func parseTypeInline(scan conf.Scanner, pos scanner.Position) (Type, error) {
@@ -190,14 +226,15 @@ func parseTypeInline(scan conf.Scanner, pos scanner.Position) (Type, error) {
 			fallthrough
 		case BoolType, ByteType, StringType:
 			return PrimitiveType(tstr), nil
-		case StreamType:
-			// TODO: streams
-			return nil, conf.WrapPos(errUnimplemented, scan.Pos())
 		default:
-			if tstr == "struct" {
+			switch tstr {
+			case "struct":
 				return nil, conf.WrapPos(errors.New("structs not allowed inline"), pos)
+			case "stream":
+				return parseStream(scan, scan.Pos())
+			default:
+				return NamedType(tstr), nil
 			}
-			return NamedType(tstr), nil
 		}
 	case '[':
 		var at ArrayType
@@ -223,17 +260,19 @@ func parseTypeNamed(scan conf.Scanner, pos scanner.Position) (Type, error) {
 			fallthrough
 		case BoolType, ByteType, StringType:
 			return PrimitiveType(tstr), nil
-		case StreamType:
-			return nil, conf.WrapPos(errors.New("streams may not be stored in a compound type"), scan.Pos())
 		default:
-			if tstr == "struct" {
+			switch tstr {
+			case "struct":
 				var st StructType
 				if err := st.parse(scan, pos); err != nil {
 					return nil, err
 				}
 				return st, nil
+			case "stream":
+				return nil, conf.WrapPos(errors.New("streams may not be stored in a compound type"), scan.Pos())
+			default:
+				return NamedType(tstr), nil
 			}
-			return NamedType(tstr), nil
 		}
 	case '[':
 		var at ArrayType
@@ -943,19 +982,37 @@ func (op *Op) prep() error {
 	if op.Inputs == nil {
 		op.Inputs = []Arg{}
 	} else {
-		for i := range op.Inputs {
+		streamcnt := 0
+		for i, v := range op.Inputs {
 			if err := op.Inputs[i].prep(); err != nil {
 				return err
 			}
+			if _, ok := v.Type.(StreamType); ok {
+				streamcnt++
+			}
+		}
+		switch streamcnt {
+		case 0, 1:
+		default:
+			return errors.New("don't cross the streams")
 		}
 	}
 	if op.Outputs == nil {
 		op.Outputs = []Arg{}
 	} else {
-		for i := range op.Outputs {
+		streamcnt := 0
+		for i, v := range op.Outputs {
 			if err := op.Outputs[i].prep(); err != nil {
 				return err
 			}
+			if _, ok := v.Type.(StreamType); ok {
+				streamcnt++
+			}
+		}
+		switch streamcnt {
+		case 0, 1:
+		default:
+			return errors.New("don't cross the streams")
 		}
 	}
 	if op.Errors == nil {
@@ -1311,6 +1368,27 @@ func main() {
 				}
 			}
 		},
+		"instream": func(op Op) bool {
+			for _, v := range op.Inputs {
+				if _, ok := v.Type.(StreamType); ok {
+					return true
+				}
+			}
+			return false
+		},
+		"outstream": func(op Op) bool {
+			for _, v := range op.Outputs {
+				if _, ok := v.Type.(StreamType); ok {
+					return true
+				}
+			}
+			return false
+		},
+		"bytestream": func() StreamType {
+			return ByteStream
+		},
+		"req": reflect.DeepEqual,
+		"rne": func(x, y interface{}) bool { return !reflect.DeepEqual(x, y) },
 	}).ParseFiles(tmplpath)
 	if err != nil {
 		panic(err)

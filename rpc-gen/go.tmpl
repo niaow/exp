@@ -2,16 +2,22 @@ package {{.GoPackage}}
 
 import (
     "bytes"
+    "bufio"
     "context"
     "encoding/json"
     "errors"
     "fmt"
+    "io"
     "io/ioutil"
     "net/http"
     "net/url"
+    "sync"
 )
 
 var _ = bytes.NewReader
+var _ = sync.NewCond
+var _ = bufio.NewWriter
+var _ = io.Pipe
 
 {{range (lines .Description) -}}
 // {{.}}
@@ -38,13 +44,34 @@ type {{.Name}} interface {
         {{end -}}
 
         {{.Name}}(ctx context.Context,
-            {{- range .Inputs -}}
-                {{.Name}} {{.Type.GoType}},
-            {{- end}}) (
-                {{- range .Outputs -}}
-                    {{.Name}} {{.Type.GoType}},
+                {{- if instream . -}}
+                    {{(index .Inputs 0).Name}} {{if req (index .Inputs 0).Type (bytestream) -}}
+                        io.Reader
+                    {{- else -}}
+                        func() ({{(index .Inputs 0).Type.Elem}}, error)
+                    {{- end}},
+                {{- else -}}
+                    {{- range .Inputs -}}
+                        {{.Name}} {{.Type.GoType}},
+                    {{- end -}}
+                {{end -}}
+                {{- if outstream . -}}
+                    {{(index .Outputs 0).Name}} {{if req (index .Outputs 0).Type (bytestream) -}}
+                        io.Writer
+                    {{- else -}}
+                        func({{(index .Outputs 0).Type.Elem}}) error
+                    {{- end}},
                 {{- end -}}
+            )
+            {{- if and (not (outstream .)) (ne (len .Outputs) 0) -}}
+                (
+                    {{- range .Outputs -}}
+                        {{.Name}} {{.Type.GoType}},
+                    {{- end -}}
                 err error)
+            {{- else -}}
+                error
+            {{- end -}}
     {{end}}
 }
 
@@ -123,16 +150,20 @@ type http{{.Name}}Handler struct {
     mux *http.ServeMux
 }
 
+type trackWriter struct {
+    wrote bool
+    w io.Writer
+}
+
+func (tw *trackWriter) Write(p []byte) (int, error) {
+    tw.wrote = true
+    return tw.w.Write(p)
+}
+
 {{$sysName := .Name}}
 {{range $i, $op := .Operations}}
     // handle{{$op.Name}} wraps the implementation's {{$op.Name}} operation and bridges it to HTTP.
     func (h http{{$sysName}}Handler) handle{{$op.Name}}(w http.ResponseWriter, r *http.Request) {
-        var args struct {
-            {{- range $op.Inputs}}
-                {{.Name}} {{.Type.GoType}} `json:"{{.Name}},omitempty"`
-            {{- end -}}
-        }
-
         if r.Method != {{gohttpmethod $op.Method}} {
             rpcError{
                 Message: fmt.Sprintf("unsupported method %q, please use %q", r.Method,{{gohttpmethod $op.Method}}),
@@ -141,36 +172,45 @@ type http{{.Name}}Handler struct {
             return
         }
 
-        {{if (eq $op.ArgEncoding "json")}}
-            if err := json.NewDecoder(r.Body).Decode(&args); err != nil {
-                rpcError{
-                    Message: err.Error(),
-                    Code: http.StatusBadRequest,
-                }.ServeHTTP(w, r)
-                return
+        {{if not (instream $op)}}
+            var args struct {
+                {{- range $op.Inputs}}
+                    {{.Name}} {{.Type.GoType}} `json:"{{.Name}},omitempty"`
+                {{- end -}}
             }
-        {{else if (eq $op.ArgEncoding "query")}}
-            q := r.URL.Query()
-            {{range $op.Inputs -}}
-                switch len(q[{{printf "%q" .Name}}]) {
-                case 0:
-                case 1:
-                    if err := json.Unmarshal([]byte(q[{{printf "%q" .Name}}][0]), &args.{{.Name}}); err != nil {
-                        rpcError{
-                            Message: err.Error(),
-                            Code: http.StatusBadRequest,
-                        }.ServeHTTP(w, r)
-                        return
-                    }
-                default:
+
+            {{if (eq $op.ArgEncoding "json")}}
+                if err := json.NewDecoder(r.Body).Decode(&args); err != nil {
                     rpcError{
-                        Message: "argument \"{{.Name}}\" duplicated",
+                        Message: err.Error(),
                         Code: http.StatusBadRequest,
                     }.ServeHTTP(w, r)
                     return
                 }
+            {{else if (eq $op.ArgEncoding "query")}}
+                q := r.URL.Query()
+                {{range $op.Inputs -}}
+                    switch len(q[{{printf "%q" .Name}}]) {
+                    case 0:
+                    case 1:
+                        if err := json.Unmarshal([]byte(q[{{printf "%q" .Name}}][0]), &args.{{.Name}}); err != nil {
+                            rpcError{
+                                Message: err.Error(),
+                                Code: http.StatusBadRequest,
+                            }.ServeHTTP(w, r)
+                            return
+                        }
+                    default:
+                        rpcError{
+                            Message: "argument \"{{.Name}}\" duplicated",
+                            Code: http.StatusBadRequest,
+                        }.ServeHTTP(w, r)
+                        return
+                    }
+                {{end}}
+            {{else}}
+                {{/* no arguments */}}
             {{end}}
-        {{else}}
         {{end}}
 
         ctx := r.Context()
@@ -189,16 +229,120 @@ type http{{.Name}}Handler struct {
             ctx = tctx
         }
 
-        var outputs struct {
-            {{- range $op.Outputs}}
-                {{.Name}} {{.Type.GoType}} `json:"{{.Name}},omitempty"`
-            {{- end}}
-        }
+        {{if not (outstream $op)}}
+            var outputs struct {
+                {{- range $op.Outputs}}
+                    {{.Name}} {{.Type.GoType}} `json:"{{.Name}},omitempty"`
+                {{- end}}
+            }
+        {{end}}
+
+        {{if instream $op}}
+            {{if rne (index $op.Inputs 0).Type (bytestream)}}
+                firstRead := true
+                ijd := json.NewDecoder(r.Body)
+                inRead := func() ({{(index $op.Inputs 0).Type.Elem}}, error) {
+                    // read opening bracket
+                    if firstRead {
+                        brack, err := ijd.Token()
+                        firstRead = false
+                        if err != nil {
+                            return {{gozero (index $op.Inputs 0).Type.Elem}}, err
+                        }
+                        if brack != json.Delim('[') {
+                            return {{gozero (index $op.Inputs 0).Type.Elem}}, fmt.Errorf("expected '[' opening stream JSON but got %q (%T)", brack, brack)
+                        }
+                    }
+
+                    // handle end of stream
+                    if !ijd.More() {
+                        // read closing token
+                        brack, err := ijd.Token()
+                        if err != nil {
+                            if err == io.EOF {
+                                err = io.ErrUnexpectedEOF
+                            }
+                            return {{gozero (index $op.Inputs 0).Type.Elem}}, err
+                        }
+                        if brack != json.Delim(']') {
+                            return {{gozero (index $op.Inputs 0).Type.Elem}}, fmt.Errorf("expected ']' closing stream JSON but got %q (%T)", brack, brack)
+                        }
+
+                        return {{gozero (index $op.Inputs 0).Type.Elem}}, io.EOF
+                    }
+
+                    // read JSON element
+                    var elem {{(index $op.Inputs 0).Type.Elem}}
+                    if err := ijd.Decode(&elem); err != nil {
+                        return {{gozero (index $op.Inputs 0).Type.Elem}}, err
+                    }
+                    return elem, nil
+                }
+            {{end}}
+        {{end}}
+
+        {{- if (outstream $op) -}}
+            {{- if rne (index $op.Outputs 0).Type (bytestream) -}}
+                bufw := bufio.NewWriter(w)
+                oje := json.NewEncoder(bufw)
+                firstWrite := true
+                startWrite := func() error {
+                    return bufw.WriteByte('[')
+                }
+                outWrite := func(elem {{(index .Outputs 0).Type.Elem}}) error {
+                    if firstWrite {
+                        firstWrite = false
+                        if err := startWrite(); err != nil {
+                            return err
+                        }
+                    } else {
+                        bufw.WriteByte(',')
+                    }
+                    return oje.Encode(elem)
+                }
+                endWrite := func() error {
+                    if firstWrite {
+                        if err := startWrite(); err != nil {
+                            return err
+                        }
+                    }
+                    bufw.WriteByte(']')
+                    return bufw.Flush()
+                }
+            {{- else -}}
+                tw := &trackWriter{w: w}
+            {{- end -}}
+        {{end}}
 
         var err error
-        {{range $op.Outputs}}outputs.{{.Name}}, {{end}}err = h.impl.{{$op.Name}}(ctx{{range $op.Inputs}}, args.{{.Name}}{{end}})
-
+        {{if not (outstream $op) -}}
+            {{range $op.Outputs}}outputs.{{.Name}}, {{end}}
+        {{- end -}}err = h.impl.{{$op.Name}}(ctx
+            {{- if not (instream $op) -}}
+                {{range $op.Inputs}}, args.{{.Name}}{{end}}
+            {{- else -}}
+                {{- if rne (index $op.Inputs 0).Type (bytestream) -}}
+                    , inRead
+                {{- else -}}
+                    , r.Body
+                {{- end -}}
+            {{- end}}
+            {{- if outstream $op -}}
+                {{- if rne (index $op.Outputs 0).Type (bytestream) -}}
+                    , outWrite
+                {{- else -}}
+                    , tw
+                {{- end -}}
+            {{end -}}
+        )
         if err != nil {
+            {{- if (outstream $op) -}}
+                {{- if rne (index $op.Outputs 0).Type (bytestream) -}}
+                    if firstWrite {
+                {{- else -}}
+                    if w.wrote {
+                {{- end -}}
+            {{end -}}
             {{- if (ne (len $op.Errors) 0)}}
                 switch e := err.(type) {
                     {{- range $op.Errors}}
@@ -219,9 +363,23 @@ type http{{.Name}}Handler struct {
                 }.ServeHTTP(w, r)
                 return
             {{end -}}
+            {{if (outstream $op) -}}
+                } else {
+                    // there is no way to propogate the error
+                    // instead, an incomplete response is returned
+                    {{if rne (index $op.Outputs 0).Type (bytestream) -}}
+                        bufw.Flush()
+                    {{- end}}
+                    return
+                }
+            {{- end -}}
         }
 
-        json.NewEncoder(w).Encode(outputs)
+        {{if not (outstream $op) -}}
+            json.NewEncoder(w).Encode(outputs)
+        {{- else if rne (index $op.Outputs 0).Type (bytestream) -}}
+            endWrite()
+        {{- end}}
     }
 {{end}}
 
@@ -283,18 +441,110 @@ type {{.Name}}Client struct {
     {{end -}}
 
     func (cli *{{$sysName}}Client) {{$op.Name}}(ctx context.Context,
-        {{- range $op.Inputs -}}
-            {{.Name}} {{.Type.GoType}},
-        {{- end}}) (
-            {{- range $op.Outputs -}}
-                {{.Name}} {{.Type.GoType}},
-            {{- end -}}
-            err error) {
+            {{- if instream . -}}
+                {{- if req (index .Inputs 0).Type (bytestream) -}}
+                    in io.Reader
+                {{- else -}}
+                    in func() ({{(index .Inputs 0).Type.Elem}}, error)
+                {{- end}},
+            {{- else -}}
+                {{- range .Inputs -}}
+                    {{.Name}} {{.Type.GoType}},
+                {{- end -}}
+            {{end -}}
+            {{- if outstream .}}
+                {{- if req (index .Outputs 0).Type (bytestream) -}}
+                    out io.Writer
+                {{- else -}}
+                    out func({{(index .Outputs 0).Type.Elem}}) error
+                {{- end}},
+            {{end -}}
+        )
+        {{- if and (not (outstream .)) (ne (len .Outputs) 0) -}}
+            (
+                {{- range .Outputs -}}
+                    {{.Type.GoType}},
+                {{- end -}}
+            error)
+        {{- else -}}
+            error
+        {{- end -}} {
             u, err := cli.Base.Parse({{printf "%q" $op.Path}})
             if err != nil {
-                return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err
+                return {{if not (outstream $op) -}}
+                    {{range $op.Outputs -}}
+                        {{gozero .Type}},
+                    {{- end}}
+                {{- end -}} err
             }
-            {{if (eq $op.ArgEncoding "json")}}
+            {{if instream $op}}
+                {{if req (index .Inputs 0).Type (bytestream)}}
+                    req, err := http.NewRequest({{gohttpmethod $op.Method}}, u.String(), in)
+                    if err != nil {
+                        return {{if not (outstream $op) -}}
+                            {{range $op.Outputs -}}
+                                {{gozero .Type}},
+                            {{- end}}
+                        {{- end -}} err
+                    }
+                {{else}}
+                    ipr, ipw := io.Pipe()
+                    var wg sync.WaitGroup
+                    defer wg.Wait()
+                    wg.Add(1)
+                    go func() {
+                        defer wg.Done()
+                        defer ipw.Close()
+                        bufw := bufio.NewWriter(ipw)
+                        if err := bufw.WriteByte('['); err != nil {
+                            ipw.CloseWithError(err)
+                            return
+                        }
+                        je := json.NewEncoder(bufw)
+                        first := true
+                        for {
+                            elem, err := in()
+                            if err != nil {
+                                if err == io.EOF {
+                                    if err = bufw.WriteByte(']'); err != nil {
+                                        ipw.CloseWithError(err)
+                                        return
+                                    }
+                                    if err = bufw.Flush(); err != nil {
+                                        ipw.CloseWithError(err)
+                                        return
+                                    }
+                                    return
+                                }
+                                ipw.CloseWithError(err)
+                                return
+                            }
+                            if first {
+                                first = false
+                            } else {
+                                if err = bufw.WriteByte(','); err != nil {
+                                    ipw.CloseWithError(err)
+                                    return
+                                }
+                            }
+                            err = je.Encode(elem)
+                            if err != nil {
+                                ipw.CloseWithError(err)
+                                return
+                            }
+                        }
+                    }()
+                    defer ipr.Close()
+                    req, err := http.NewRequest({{gohttpmethod $op.Method}}, u.String(), ipr)
+                    if err != nil {
+                        return {{if not (outstream $op) -}}
+                            {{range $op.Outputs -}}
+                                {{gozero .Type}},
+                            {{- end}}
+                        {{- end -}} err
+                    }
+                {{end}}
+            {{else if (eq $op.ArgEncoding "json")}}
                 dat, err := json.Marshal(struct {
                     {{- range $op.Inputs}}
                         {{.Name}} {{.Type.GoType}} `json:"{{.Name}},omitempty"`
@@ -305,18 +555,30 @@ type {{.Name}}Client struct {
                     {{- end}}
                 })
                 if err != nil {
-                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err
+                    return {{if not (outstream $op) -}}
+                        {{range $op.Outputs -}}
+                            {{gozero .Type}},
+                        {{- end}}
+                    {{- end -}} err
                 }
                 req, err := http.NewRequest({{gohttpmethod $op.Method}}, u.String(), bytes.NewReader(dat))
                 if err != nil {
-                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err
+                    return {{if not (outstream $op) -}}
+                        {{range $op.Outputs -}}
+                            {{gozero .Type}},
+                        {{- end}}
+                    {{- end -}} err
                 }
             {{else if (eq $op.ArgEncoding "query")}}
                 q := u.Query()
                 {{- range $op.Inputs}}
                     raw{{.Name}}, err := json.Marshal({{.Name}}) {{/* TODO: optimize to simple calls (e.g. strconv.Itoa) */}}
                     if err != nil {
-                        return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err
+                        return {{if not (outstream $op) -}}
+                            {{range $op.Outputs -}}
+                                {{gozero .Type}},
+                            {{- end}}
+                        {{- end -}} err
                     }
                     q.Set({{printf "%q" .Name}}, string(raw{{.Name}}))
                 {{- end}}
@@ -324,12 +586,20 @@ type {{.Name}}Client struct {
 
                 req, err := http.NewRequest({{gohttpmethod $op.Method}}, u.String(), nil)
                 if err != nil {
-                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err
+                    return {{if not (outstream $op) -}}
+                        {{range $op.Outputs -}}
+                            {{gozero .Type}},
+                        {{- end}}
+                    {{- end -}} err
                 }
             {{else}}
                 req, err := http.NewRequest({{gohttpmethod $op.Method}}, u.String(), nil)
                 if err != nil {
-                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err
+                    return {{if not (outstream $op) -}}
+                        {{range $op.Outputs -}}
+                            {{gozero .Type}},
+                        {{- end}}
+                    {{- end -}} err
                 }
             {{end -}}
 
@@ -341,7 +611,11 @@ type {{.Name}}Client struct {
 
                 req, err = cli.Contextualize(cctx, req)
                 if err != nil {
-                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err
+                    return {{if not (outstream $op) -}}
+                        {{range $op.Outputs -}}
+                            {{gozero .Type}},
+                        {{- end}}
+                    {{- end -}} err
                 }
             }
 
@@ -351,19 +625,31 @@ type {{.Name}}Client struct {
             }
             resp, err := hcl.Do(req)
             if err != nil {
-                return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err
+                return {{if not (outstream $op) -}}
+                    {{range $op.Outputs -}}
+                        {{gozero .Type}},
+                    {{- end}}
+                {{- end -}} err
             }
             defer resp.Body.Close()
 
             if resp.StatusCode != http.StatusOK {
                 dat, eerr := ioutil.ReadAll(resp.Body)
                 if eerr != nil {
-                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}errors.New(resp.Status)
+                    return {{if not (outstream $op) -}}
+                        {{range $op.Outputs -}}
+                            {{gozero .Type}},
+                        {{- end}}
+                    {{- end -}} errors.New(resp.Status)
                 }
                 var rerr rpcError
                 eerr = json.Unmarshal(dat, &rerr)
                 if eerr != nil {
-                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}errors.New(string(dat))
+                    return {{if not (outstream $op) -}}
+                        {{range $op.Outputs -}}
+                            {{gozero .Type}},
+                        {{- end}}
+                    {{- end -}} errors.New(string(dat))
                 }
                 {{if (ne (len $op.Errors) 0)}}
                     rmsg := rerr.Message
@@ -373,23 +659,85 @@ type {{.Name}}Client struct {
                         rerr.Data = &{{.}}{}
                     {{end -}}
                     default:
-                        return {{range $op.Outputs}}{{gozero .Type}}, {{end}}errors.New(rmsg)
+                        return {{if not (outstream $op) -}}
+                            {{range $op.Outputs -}}
+                                {{gozero .Type}},
+                            {{- end}}
+                        {{- end -}} errors.New(rmsg)
                     }
                     eerr = json.Unmarshal(dat, &rerr)
                     if eerr != nil {
-                        return {{range $op.Outputs}}{{gozero .Type}}, {{end}}errors.New(rmsg)
+                        return {{if not (outstream $op) -}}
+                            {{range $op.Outputs -}}
+                                {{gozero .Type}},
+                            {{- end}}
+                        {{- end -}} errors.New(rmsg)
                     }
                     decerr, ok := rerr.Data.(error)
                     if !ok {
-                        return {{range $op.Outputs}}{{gozero .Type}}, {{end}}errors.New(rmsg)
+                        return {{if not (outstream $op) -}}
+                            {{range $op.Outputs -}}
+                                {{gozero .Type}},
+                            {{- end}}
+                        {{- end -}} errors.New(rmsg)
                     }
-                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}decerr
+                    return {{if not (outstream $op) -}}
+                        {{range $op.Outputs -}}
+                            {{gozero .Type}},
+                        {{- end}}
+                    {{- end -}} decerr
                 {{else}}
-                    return {{range $op.Outputs}}{{gozero .Type}}, {{end}}errors.New(rerr.Message)
+                    return {{if not (outstream $op) -}}
+                        {{range $op.Outputs -}}
+                            {{gozero .Type}},
+                        {{- end}}
+                    {{- end -}} errors.New(rerr.Message)
                 {{end -}}
             }
 
-            {{if (ne (len $op.Outputs) 0)}}
+            {{if outstream $op}}
+                {{if req (index .Outputs 0).Type (bytestream)}}
+                    _, err = io.Copy(out, resp.Body)
+                    if err != nil {
+                        return err
+                    }
+                    return nil
+                {{else}}
+                    jd := json.NewDecoder(resp.Body)
+                    brack, err := jd.Token()
+                    if err != nil {
+                        if err == io.EOF {
+                            err = io.ErrUnexpectedEOF
+                        }
+                        return err
+                    }
+                    if brack != json.Delim('[') {
+                        return fmt.Errorf("expected '[' opening stream JSON but got %q (%T)", brack, brack)
+                    }
+                    for jd.More() {
+                        var elem {{(index .Inputs 0).Type}}
+                        err = jd.Decode(&elem)
+                        if err != nil {
+                            return err
+                        }
+                        err = out(elem)
+                        if err != nil {
+                            return err
+                        }
+                    }
+                    brack, err = jd.Token()
+                    if err != nil {
+                        if err == io.EOF {
+                            err = io.ErrUnexpectedEOF
+                        }
+                        return err
+                    }
+                    if brack != json.Delim(']') {
+                        return fmt.Errorf("expected ']' closing stream JSON but got %q (%T)", brack, brack)
+                    }
+                    return nil
+                {{end}}
+            {{else if (ne (len $op.Outputs) 0)}}
                 bdat, err := ioutil.ReadAll(resp.Body)
                 if err != nil {
                     return {{range $op.Outputs}}{{gozero .Type}}, {{end}}err

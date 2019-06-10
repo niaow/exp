@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"io"
 	"net/http"
 
 	gomath "math"
@@ -52,4 +53,33 @@ func (m maff) Statistics(ctx context.Context, data []float64) (res math.Stats, e
 		Mean:  mean,
 		Stdev: stdev,
 	}, nil
+}
+
+func (m maff) Sum(ctx context.Context, numbers func() (float64, error)) (float64, error) {
+	res := 0.0
+	for {
+		v, err := numbers()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return 0.0, err
+		}
+		res += v
+	}
+	return res, nil
+}
+
+func (m maff) Factor(ctx context.Context, num uint64, factors func(uint64) error) error {
+	for i := uint64(2); num != 1; i++ {
+		if num%i == 0 {
+			if err := factors(i); err != nil {
+				return err
+			}
+			for num%i == 0 {
+				num /= i
+			}
+		}
+	}
+	return nil
 }
