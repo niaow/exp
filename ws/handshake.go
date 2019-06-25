@@ -430,6 +430,13 @@ func (d *Dialer) Dial(ctx context.Context, u *url.URL, opts HandshakeOptions) (*
 func Upgrade(w http.ResponseWriter, r *http.Request, opts HandshakeOptions) (*Conn, Handshake, error) {
 	switch r.Method {
 	case http.MethodGet:
+		// ensure conformant http version
+		if !r.ProtoAtLeast(1, 1) {
+			return nil, Handshake{
+				Method: http.MethodGet,
+			}, errors.New("unsupported HTTP version")
+		}
+
 		// check special headers
 		switch {
 		case !strings.EqualFold(r.Header.Get("Upgrade"), "websocket"):
@@ -454,15 +461,15 @@ func Upgrade(w http.ResponseWriter, r *http.Request, opts HandshakeOptions) (*Co
 
 		// answer challenge
 		w.Header().Set("Sec-WebSocket-Accept", challengeResponse(r))
-	case http.MethodConnect:
-		if !strings.EqualFold(":protocol", "websocket") {
-			http.Error(w, "protocol is not websocket", http.StatusBadRequest)
-			return nil, Handshake{
-				Method:    http.MethodGet,
-				HTTPMajor: r.ProtoMajor,
-				HTTPMinor: r.ProtoMinor,
-			}, errors.New("protocol is not websocket")
-		}
+	/*case http.MethodConnect:
+	if !strings.EqualFold(":protocol", "websocket") {
+		http.Error(w, "protocol is not websocket", http.StatusBadRequest)
+		return nil, Handshake{
+			Method:    http.MethodGet,
+			HTTPMajor: r.ProtoMajor,
+			HTTPMinor: r.ProtoMinor,
+		}, errors.New("protocol is not websocket")
+	}*/
 	default:
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return nil, Handshake{
