@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -179,6 +180,9 @@ type Conn struct {
 	closed chan struct{}
 
 	notFirstRead bool
+
+	je      *json.Encoder
+	jeAlloc sync.Once
 }
 
 func (c *Conn) startFrame(h header) error {
@@ -319,6 +323,48 @@ func (c *Conn) Write(dat []byte) (int, error) {
 	}
 
 	return len(dat), nil
+}
+
+// SendText sends a text frame with the given string.
+func (c *Conn) SendText(txt string) error {
+	err := c.StartText(uint64(len(txt)))
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(c, txt)
+	if err != nil {
+		return err
+	}
+	return c.End()
+}
+
+// SendBinary sends a binary frame with the given data.
+func (c *Conn) SendBinary(dat []byte) error {
+	err := c.StartBinary(uint64(len(dat)))
+	if err != nil {
+		return err
+	}
+	_, err = c.Write(dat)
+	if err != nil {
+		return err
+	}
+	return c.End()
+}
+
+// SendJSON sends the given data as JSON in a text frame.
+func (c *Conn) SendJSON(v interface{}) error {
+	c.jeAlloc.Do(func() {
+		c.je = json.NewEncoder(c)
+	})
+	err := c.StartTextStream() // TODO: send small JSON in a single frame
+	if err != nil {
+		return err
+	}
+	err = c.je.Encode(v)
+	if err != nil {
+		return err
+	}
+	return c.End()
 }
 
 // writeControl writes a control frame
@@ -491,6 +537,15 @@ func (c *Conn) Ping(dat []byte) error {
 		opcode: opPing,
 		length: uint64(len(dat)),
 	}, dat)
+}
+
+// ReadJSON reads the current frame as JSON and stores it into the given value.
+func (c *Conn) ReadJSON(v interface{}) error {
+	dat, err := ioutil.ReadAll(c)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(dat, v)
 }
 
 // Close attempts to gracefully close the WebSocket connection.
