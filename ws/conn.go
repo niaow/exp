@@ -1,3 +1,13 @@
+// Package ws implements WebSockets, as defined in RFC 6455 and RFC 8441.
+// It can automatically respond to pings.
+// It also has (WIP) support for HTTP/2.
+// Most notably, it only uses a standard *http.Client from "net/http".
+// See examples/chat for a working example of using this package.
+//
+//
+// References:
+// 	RFC 6455 - https://tools.ietf.org/html/rfc6455
+// 	RFC 8441 - https://tools.ietf.org/html/rfc8441
 package ws
 
 import (
@@ -14,6 +24,8 @@ import (
 	"sync/atomic"
 )
 
+// header is a websocket frame header
+// https://tools.ietf.org/html/rfc6455#section-5.2
 type header struct {
 	fin              bool
 	rsv1, rsv2, rsv3 bool
@@ -23,6 +35,8 @@ type header struct {
 	maskKey          [4]byte
 }
 
+// standard frame header opcodes
+// https://tools.ietf.org/html/rfc6455#section-5.2
 const (
 	opContinue uint8 = 0
 	opText     uint8 = 1
@@ -32,6 +46,7 @@ const (
 	opPong     uint8 = 10
 )
 
+// readHeader reads a frame header
 func readHeader(r io.Reader) (header, error) {
 	buf := make([]byte, 16/8, 64/8)
 	_, err := io.ReadFull(r, buf)
@@ -74,6 +89,7 @@ func readHeader(r io.Reader) (header, error) {
 	return f, nil
 }
 
+// boolToByte returns the bit corresponding to the given bool
 func boolToByte(v bool) byte {
 	if v {
 		return 1
@@ -82,6 +98,7 @@ func boolToByte(v bool) byte {
 	}
 }
 
+// write writes the given header to the writer without flushing
 func (h header) write(w *bufio.Writer) error {
 	err := w.WriteByte(
 		boolToByte(h.fin)<<7 |
@@ -147,6 +164,10 @@ func (c *cad) release(name string) {
 }
 
 // Conn is a websocket connection.
+// At most one concurrent writer is permitted (including graceful closures).
+// At most one concurrent reader is permitted.
+// Forced closures can be done at any time.
+// Pings will only be responded to during calls to NextFrame.
 type Conn struct {
 	// conn is the underlying connection, if present
 	conn net.Conn
@@ -532,6 +553,8 @@ start:
 }
 
 // Ping sends a ping message over the connection.
+// Ping may be called concurrently with writers.
+// However, ping may not be called concurrently with itself.
 func (c *Conn) Ping(dat []byte) error {
 	if len(dat) > 125 {
 		return errors.New("ping exceeds max length")
