@@ -24,12 +24,12 @@ type header struct {
 }
 
 const (
-	opContinue uint8 = iota
-	opText
-	opBinary
-	opClose uint8 = iota + 8
-	opPing
-	opPong
+	opContinue uint8 = 0
+	opText     uint8 = 1
+	opBinary   uint8 = 2
+	opClose    uint8 = 8
+	opPing     uint8 = 9
+	opPong     uint8 = 10
 )
 
 func readHeader(r io.Reader) (header, error) {
