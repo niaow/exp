@@ -185,6 +185,11 @@ type Conn struct {
 	jeAlloc sync.Once
 }
 
+func tryClose(ch chan struct{}) {
+	defer func() { recover() }()
+	close(ch)
+}
+
 func (c *Conn) startFrame(h header) error {
 	c.writeLck.Lock()
 	err := h.write(c.brw.Writer)
@@ -480,7 +485,7 @@ frame:
 	case opClose:
 		// TODO: actually read close message
 		io.CopyN(ioutil.Discard, c.brw, int64(h.length))
-		close(c.closed)
+		tryClose(c.closed)
 		return 0, io.EOF
 	default:
 		return 0, fmt.Errorf("unrecognized frame opcode %d", h.opcode)
@@ -612,5 +617,6 @@ func (c *Conn) Close(ctx context.Context, code uint16, reason string) error {
 
 // ForceClose terminates the connection immediately and unsafely.
 func (c *Conn) ForceClose() error {
+	tryClose(c.closed)
 	return c.close.Close()
 }
