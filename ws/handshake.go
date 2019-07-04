@@ -13,12 +13,22 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // HandshakeOptions is a set of options for a websocket handshake.
 type HandshakeOptions struct {
 	SupportedProtocols []string
 	Headers            http.Header
+
+	// PingInterval is the interval at which pings are normally sent.
+	// Defaults to 30 seconds.
+	PingInterval time.Duration
+
+	// PongTimeout is the maximum duration between the sending of a ping and reception of a pong.
+	// This should be a multiple of PingInterval, otherwise it will be rounded up to a multiple of PingInterval.
+	// Defaults to 2*PingInterval.
+	PongTimeout time.Duration
 }
 
 // Handshake is metadata from a websocket handshake.
@@ -401,7 +411,16 @@ func (d *Dialer) Dial(ctx context.Context, u *url.URL, opts HandshakeOptions) (*
 	case d.DisableHTTP1 && d.DisableHTTP2:
 		return nil, Handshake{}, errors.New("both HTTP/1 and HTTP/2 are disabled")
 	case d.DisableHTTP2:*/
-	return d.dialHTTP1(ctx, u, opts)
+	c, h, err := d.dialHTTP1(ctx, u, opts)
+	if err != nil {
+		return nil, h, err
+	}
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.pingLoop(opts.PingInterval, opts.PongTimeout)
+	}()
+	return c, h, nil
 	/*case d.PreferHTTP1:
 		c, h, err := d.dialHTTP1(ctx, u, opts)
 		if err != nil {
@@ -529,16 +548,22 @@ func Upgrade(w http.ResponseWriter, r *http.Request, opts HandshakeOptions) (*Co
 	}
 
 	// finish
-	return &Conn{
-			conn:   c,
-			brw:    brw,
-			close:  c,
-			closed: make(chan struct{}),
-		}, Handshake{
-			Method:    http.MethodGet,
-			HTTPMajor: r.ProtoMajor,
-			HTTPMinor: r.ProtoMinor,
-			Version:   13,
-			Protocol:  w.Header().Get("Sec-WebSocket-Protocol"),
-		}, nil
+	wsc := &Conn{
+		conn:   c,
+		brw:    brw,
+		close:  c,
+		closed: make(chan struct{}),
+	}
+	wsc.wg.Add(1)
+	go func() {
+		defer wsc.wg.Done()
+		wsc.pingLoop(opts.PingInterval, opts.PongTimeout)
+	}()
+	return wsc, Handshake{
+		Method:    http.MethodGet,
+		HTTPMajor: r.ProtoMajor,
+		HTTPMinor: r.ProtoMinor,
+		Version:   13,
+		Protocol:  w.Header().Get("Sec-WebSocket-Protocol"),
+	}, nil
 }

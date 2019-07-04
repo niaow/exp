@@ -12,6 +12,7 @@ package ws
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -20,8 +21,10 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // header is a websocket frame header
@@ -202,8 +205,58 @@ type Conn struct {
 
 	notFirstRead bool
 
+	// ping-pong
+	wg       sync.WaitGroup
+	lastPong uint32
+
+	closeSent   bool
+	closeReason error
+
 	je      *json.Encoder
 	jeAlloc sync.Once
+}
+
+// ErrAlreadyClosed is an error indicating that the operation failed because the connection was closed.
+var ErrAlreadyClosed = errors.New("write after WebSocket connection already closed")
+
+func (c *Conn) pingLoop(interval time.Duration, timeout time.Duration) {
+	if interval == 0 {
+		interval = 30 * time.Second
+	}
+	if timeout == 0 {
+		timeout = 2 * interval
+	}
+
+	timeoutcnt := timeout / interval
+	if timeout%interval != 0 {
+		timeoutcnt++
+	}
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	var lastPing uint32
+	strikesRemaining := timeoutcnt
+	for {
+		select {
+		case <-c.closed:
+			return
+		case <-tick.C:
+			if atomic.LoadUint32(&c.lastPong) < lastPing {
+				strikesRemaining--
+				if strikesRemaining == 0 {
+					c.forceClose()
+					return
+				}
+			} else {
+				strikesRemaining = timeoutcnt
+				lastPing++
+				err := c.ping([]byte(strconv.FormatUint(uint64(lastPing), 10)))
+				if err != nil {
+					c.forceClose()
+					return
+				}
+			}
+		}
+	}
 }
 
 func tryClose(ch chan struct{}) {
@@ -211,9 +264,18 @@ func tryClose(ch chan struct{}) {
 	close(ch)
 }
 
-func (c *Conn) startFrame(h header) error {
+func (c *Conn) startFrame(h header) (err error) {
+	defer func() {
+		if err != nil {
+			select {
+			case <-c.closed:
+				err = ErrAlreadyClosed
+			default:
+			}
+		}
+	}()
 	c.writeLck.Lock()
-	err := h.write(c.brw.Writer)
+	err = h.write(c.brw.Writer)
 	if err != nil {
 		c.writeLck.Unlock()
 		return err
@@ -282,12 +344,22 @@ func (c *Conn) StartBinaryStream() error {
 
 // End ends the current frame or stream.
 // This must be called before starting a new frame.
-func (c *Conn) End() error {
+func (c *Conn) End() (err error) {
 	c.writeCAD.acquire("write")
 	defer c.writeCAD.release("write")
 
+	defer func() {
+		if err != nil {
+			select {
+			case <-c.closed:
+				err = ErrAlreadyClosed
+			default:
+			}
+		}
+	}()
+
 	if c.streamWrite {
-		err := header{
+		err = header{
 			fin:    true,
 			opcode: opContinue,
 		}.write(c.brw.Writer)
@@ -301,7 +373,7 @@ func (c *Conn) End() error {
 			return errors.New("incomplete frame write")
 		}
 	}
-	err := c.brw.Writer.Flush()
+	err = c.brw.Writer.Flush()
 	if err != nil {
 		c.writeLck.Unlock()
 		return err
@@ -313,12 +385,22 @@ func (c *Conn) End() error {
 }
 
 // Write writes to the current frame or stream.
-func (c *Conn) Write(dat []byte) (int, error) {
+func (c *Conn) Write(dat []byte) (n int, err error) {
 	c.writeCAD.acquire("write")
 	defer c.writeCAD.release("write")
 
+	defer func() {
+		if err != nil {
+			select {
+			case <-c.closed:
+				err = ErrAlreadyClosed
+			default:
+			}
+		}
+	}()
+
 	if c.streamWrite {
-		err := header{
+		err = header{
 			fin:    false,
 			opcode: opContinue,
 			length: uint64(len(dat)),
@@ -335,7 +417,7 @@ func (c *Conn) Write(dat []byte) (int, error) {
 		}
 	} else {
 		if uint64(len(dat)) <= c.writeLength {
-			_, err := c.brw.Write(dat)
+			_, err = c.brw.Write(dat)
 			if err != nil {
 				c.writeLck.Unlock()
 				return 0, err
@@ -425,9 +507,6 @@ const (
 
 	// BinaryFrame is a frame containing binary data.
 	BinaryFrame
-
-	// PongFrame is a frame containing a pong.
-	PongFrame
 )
 
 func (c *Conn) sendPong(h header) error {
@@ -467,8 +546,107 @@ func (c *Conn) sendPong(h header) error {
 	return nil
 }
 
+var errBadCloseMessage = errors.New("bad close message")
+
+// ErrCloseMessage is an error indicating that the connection was closed by the other side.
+type ErrCloseMessage struct {
+	rawMsg []byte
+}
+
+// Code returns the status code of the closure.
+func (err ErrCloseMessage) Code() (uint16, error) {
+	if len(err.rawMsg) < 2 {
+		return 0, errBadCloseMessage
+	}
+	return binary.BigEndian.Uint16(err.rawMsg[:2]), nil
+}
+
+// Reason returns the reason text for the closure.
+func (err ErrCloseMessage) Reason() (string, error) {
+	if len(err.rawMsg) < 2 {
+		return "", errBadCloseMessage
+	}
+	return string(err.rawMsg[2:]), nil
+}
+
+func (err ErrCloseMessage) Error() string {
+	code, derr := err.Code()
+	if derr != nil {
+		return "bad close message"
+	}
+	reason, derr := err.Reason()
+	if derr != nil {
+		return "bad close message"
+	}
+
+	if reason == "" {
+		return fmt.Sprintf("closed with code %d", code)
+	}
+	return fmt.Sprintf("closed with code %d: %q", code, reason)
+}
+
+func (c *Conn) respClose(h header) error {
+	c.writeLck.Lock()
+	defer c.writeLck.Unlock()
+
+	if !c.closeSent {
+		err := header{
+			fin:    true,
+			opcode: opClose,
+
+			// length is supposed to be less than 125
+			length: h.length,
+		}.write(c.brw.Writer)
+		if err != nil {
+			return err
+		}
+	}
+
+	if h.length > 125 {
+		c.ForceClose()
+		return errors.New("oversized close frame")
+	}
+
+	var cmsg []byte
+	if c.closeSent {
+		_, err := io.CopyN(ioutil.Discard, c.brw, int64(h.length))
+		if err != nil {
+			return err
+		}
+	} else {
+		var buf bytes.Buffer
+		_, err := io.CopyN(c.brw, io.TeeReader(c.brw, &buf), int64(h.length))
+		if err != nil {
+			return err
+		}
+		cmsg = buf.Bytes()
+	}
+
+	err := c.brw.Flush()
+	if err != nil {
+		return err
+	}
+
+	if !c.closeSent {
+		c.closeReason = ErrCloseMessage{cmsg}
+	}
+
+	return nil
+}
+
+// ErrClosed is an error returned when a close frame is recieved.
+type ErrClosed struct {
+	Err error
+}
+
+func (err ErrClosed) Error() string {
+	return fmt.Sprintf("closed: %s", err.Err.Error())
+}
+
 // NextFrame reads the header of the next frame and returns an the frame type.
 // If a ping is encountered, it will be responded to, then another frame will be read.
+// The error io.EOF will be returned when a response to a close frame is recieved.
+// An error of the type ErrClosed will be returned when the opposite side closes the connection.
 func (c *Conn) NextFrame() (int, error) {
 	c.readCAD.acquire("read")
 	defer c.readCAD.release("read")
@@ -492,21 +670,39 @@ frame:
 		c.notFirstRead = true
 		return BinaryFrame, nil
 	case opPong:
-		c.readLength, c.readFrame = h.length, h
-		c.notFirstRead = true
-		return PongFrame, nil
+		if h.length > 125 {
+			return 0, errors.New("oversized pong frame")
+		}
+		buf := make([]byte, h.length)
+		_, err = io.ReadFull(c.brw, buf)
+		if err != nil {
+			return 0, fmt.Errorf("failed to read pong: %s", err)
+		}
+		n, err := strconv.ParseUint(string(buf), 10, 32)
+		if err != nil {
+			return 0, fmt.Errorf("failed to read pong: %s", err)
+		}
+		if !atomic.CompareAndSwapUint32(&c.lastPong, uint32(n)-1, uint32(n)) {
+			return 0, fmt.Errorf("failed to process pong: incorrect payload (expected %d but got %d)", atomic.LoadUint32(&c.lastPong)+1, n)
+		}
+		goto frame
 	case opContinue:
 		return 0, errors.New("found a continue frame without a starting frame")
 	case opPing:
-		err := c.sendPong(h)
+		err = c.sendPong(h)
 		if err != nil {
 			return 0, err
 		}
 		goto frame
 	case opClose:
-		// TODO: actually read close message
-		io.CopyN(ioutil.Discard, c.brw, int64(h.length))
-		tryClose(c.closed)
+		err := c.respClose(h)
+		if err != nil {
+			return 0, err
+		}
+		c.ForceClose()
+		if c.closeReason != nil {
+			return 0, ErrClosed{c.closeReason}
+		}
 		return 0, io.EOF
 	default:
 		return 0, fmt.Errorf("unrecognized frame opcode %d", h.opcode)
@@ -552,10 +748,10 @@ start:
 	}
 }
 
-// Ping sends a ping message over the connection.
-// Ping may be called concurrently with writers.
+// ping sends a ping message over the connection.
+// ping may be called concurrently with writers.
 // However, ping may not be called concurrently with itself.
-func (c *Conn) Ping(dat []byte) error {
+func (c *Conn) ping(dat []byte) error {
 	if len(dat) > 125 {
 		return errors.New("ping exceeds max length")
 	}
@@ -576,30 +772,11 @@ func (c *Conn) ReadJSON(v interface{}) error {
 	return json.Unmarshal(dat, v)
 }
 
-// Close attempts to gracefully close the WebSocket connection.
-// The reason string must be no more than 123 characters.
-// If the context is cancelled, the connection will be immediately terminated.
-// It is suggested that a reasonable timeout is applied to the context.
-func (c *Conn) Close(ctx context.Context, code uint16, reason string) error {
-	c.writeCAD.acquire("write")
-	defer c.writeCAD.release("write")
-
-	// set up timeout/cancellation
-	ctx, cancel := context.WithCancel(ctx)
-	var wg sync.WaitGroup
-	defer wg.Wait()
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		<-ctx.Done()
-		c.ForceClose()
-	}()
-	defer cancel()
-
+// writeClose writes a closure frame
+func (c *Conn) writeClose(code uint16, reason string) error {
 	c.writeLck.Lock()
 	defer c.writeLck.Unlock()
 
-	// send closure message
 	if len(reason)+2 > 125 {
 		reason = reason[:125-5] + "..."
 	}
@@ -626,20 +803,68 @@ func (c *Conn) Close(ctx context.Context, code uint16, reason string) error {
 		return err
 	}
 
+	return nil
+}
+
+// Close attempts to gracefully close the WebSocket connection.
+// The reason string must be no more than 123 characters.
+// If the context is cancelled, the connection will be immediately terminated.
+// It is suggested that a reasonable timeout is applied to the context.
+func (c *Conn) Close(ctx context.Context, code uint16, reason string) (err error) {
+	c.writeCAD.acquire("write")
+	defer c.writeCAD.release("write")
+
+	octx := ctx
+	var fcerr error
+	defer func() {
+		if err != nil {
+			select {
+			case <-octx.Done():
+				err = octx.Err()
+			default:
+			}
+		} else {
+			if fcerr != nil {
+				err = fcerr
+			}
+		}
+	}()
+
+	// set up timeout/cancellation
+	ctx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-ctx.Done()
+		fcerr = c.ForceClose()
+	}()
+	defer cancel()
+
+	// send closure message
+	if err := c.writeClose(code, reason); err != nil {
+		return err
+	}
+
 	// wait for response
 	select {
 	case <-c.closed:
 	case <-ctx.Done():
+		return ctx.Err()
 	}
 
-	if err = ctx.Err(); err != nil {
-		return err
-	}
 	return nil
+}
+
+// forceClose terminates the connection immediately and unsafely, without waiting for ping goroutine shutdown.
+func (c *Conn) forceClose() error {
+	tryClose(c.closed)
+	return c.close.Close()
 }
 
 // ForceClose terminates the connection immediately and unsafely.
 func (c *Conn) ForceClose() error {
-	tryClose(c.closed)
-	return c.close.Close()
+	defer c.wg.Wait()
+	return c.forceClose()
 }

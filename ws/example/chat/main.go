@@ -6,9 +6,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/jadr2ddude/exp/ws"
@@ -83,7 +81,6 @@ func handleConn(c *ws.Conn, sub chan<- chan<- Message, unsub chan<- chan<- Messa
 
 	// start read end
 	wg.Add(1)
-	var lastPong uint32
 	done := make(chan struct{})
 	go func() {
 		defer wg.Done()
@@ -104,13 +101,6 @@ func handleConn(c *ws.Conn, sub chan<- chan<- Message, unsub chan<- chan<- Messa
 					Sender: username,
 					Body:   string(dat),
 				}
-			case ws.PongFrame:
-				var pongV uint32
-				err = c.ReadJSON(&pongV)
-				if err != nil {
-					return
-				}
-				atomic.StoreUint32(&lastPong, pongV)
 			default:
 				return
 			}
@@ -145,23 +135,10 @@ func handleConn(c *ws.Conn, sub chan<- chan<- Message, unsub chan<- chan<- Messa
 	}()
 
 	// start writing side
-	tick := time.NewTicker(20 * time.Second)
-	defer tick.Stop()
-	var curPing uint32
 	for {
 		select {
 		case <-done:
 			return
-		case <-tick.C:
-			if atomic.LoadUint32(&lastPong) != curPing {
-				// ping timeout
-				return
-			}
-			curPing++
-			err := c.Ping([]byte(strconv.FormatUint(uint64(curPing), 10)))
-			if err != nil {
-				return
-			}
 		case m := <-mch:
 			err := c.SendJSON(m)
 			if err != nil {
