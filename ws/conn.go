@@ -181,8 +181,8 @@ type Conn struct {
 	// close is the interface used to close the underlying connection
 	close io.Closer
 
-	// writeLck is locked when starting a frame and unlocked after
-	writeLck sync.Mutex
+	// writeLock is locked when starting a frame and unlocked after
+	writeLock sync.Mutex
 
 	// writeLength is the remaining length of the frame write
 	writeLength uint64
@@ -227,14 +227,14 @@ func (c *Conn) pingLoop(interval time.Duration, timeout time.Duration) {
 		timeout = 2 * interval
 	}
 
-	timeoutcnt := timeout / interval
+	nTimeout := timeout / interval
 	if timeout%interval != 0 {
-		timeoutcnt++
+		nTimeout++
 	}
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	var lastPing uint32
-	strikesRemaining := timeoutcnt
+	strikesRemaining := nTimeout
 	for {
 		select {
 		case <-c.closed:
@@ -247,7 +247,7 @@ func (c *Conn) pingLoop(interval time.Duration, timeout time.Duration) {
 					return
 				}
 			} else {
-				strikesRemaining = timeoutcnt
+				strikesRemaining = nTimeout
 				lastPing++
 				err := c.ping([]byte(strconv.FormatUint(uint64(lastPing), 10)))
 				if err != nil {
@@ -274,10 +274,10 @@ func (c *Conn) startFrame(h header) (err error) {
 			}
 		}
 	}()
-	c.writeLck.Lock()
+	c.writeLock.Lock()
 	err = h.write(c.brw.Writer)
 	if err != nil {
-		c.writeLck.Unlock()
+		c.writeLock.Unlock()
 		return err
 	}
 	c.writeLength = h.length
@@ -364,22 +364,22 @@ func (c *Conn) End() (err error) {
 			opcode: opContinue,
 		}.write(c.brw.Writer)
 		if err != nil {
-			c.writeLck.Unlock()
+			c.writeLock.Unlock()
 			return err
 		}
 	} else {
 		if c.writeLength != 0 {
-			c.writeLck.Unlock()
+			c.writeLock.Unlock()
 			return errors.New("incomplete frame write")
 		}
 	}
 	err = c.brw.Writer.Flush()
 	if err != nil {
-		c.writeLck.Unlock()
+		c.writeLock.Unlock()
 		return err
 	}
 
-	c.writeLck.Unlock()
+	c.writeLock.Unlock()
 
 	return nil
 }
@@ -406,26 +406,26 @@ func (c *Conn) Write(dat []byte) (n int, err error) {
 			length: uint64(len(dat)),
 		}.write(c.brw.Writer)
 		if err != nil {
-			c.writeLck.Unlock()
+			c.writeLock.Unlock()
 			return 0, err
 		}
 
 		_, err = c.brw.Write(dat)
 		if err != nil {
-			c.writeLck.Unlock()
+			c.writeLock.Unlock()
 			return 0, err
 		}
 	} else {
 		if uint64(len(dat)) <= c.writeLength {
 			_, err = c.brw.Write(dat)
 			if err != nil {
-				c.writeLck.Unlock()
+				c.writeLock.Unlock()
 				return 0, err
 			}
 
 			c.writeLength -= uint64(len(dat))
 		} else {
-			c.writeLck.Unlock()
+			c.writeLock.Unlock()
 			return 0, errors.New("oversize write")
 		}
 	}
@@ -480,8 +480,8 @@ func (c *Conn) writeControl(h header, dat []byte) error {
 	c.controlCAD.acquire("control")
 	defer c.controlCAD.release("control")
 
-	c.writeLck.Lock()
-	defer c.writeLck.Unlock()
+	c.writeLock.Lock()
+	defer c.writeLock.Unlock()
 
 	err := h.write(c.brw.Writer)
 	if err != nil {
@@ -510,8 +510,8 @@ const (
 )
 
 func (c *Conn) sendPong(h header) error {
-	c.writeLck.Lock()
-	defer c.writeLck.Unlock()
+	c.writeLock.Lock()
+	defer c.writeLock.Unlock()
 
 	err := header{
 		fin:    true,
@@ -586,8 +586,8 @@ func (err ErrCloseMessage) Error() string {
 }
 
 func (c *Conn) respClose(h header) error {
-	c.writeLck.Lock()
-	defer c.writeLck.Unlock()
+	c.writeLock.Lock()
+	defer c.writeLock.Unlock()
 
 	if !c.closeSent {
 		err := header{
@@ -774,8 +774,8 @@ func (c *Conn) ReadJSON(v interface{}) error {
 
 // writeClose writes a closure frame
 func (c *Conn) writeClose(code uint16, reason string) error {
-	c.writeLck.Lock()
-	defer c.writeLck.Unlock()
+	c.writeLock.Lock()
+	defer c.writeLock.Unlock()
 
 	if len(reason)+2 > 125 {
 		reason = reason[:125-5] + "..."
