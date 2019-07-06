@@ -835,20 +835,20 @@ func (c *Conn) writeClose(code uint16, reason string) error {
 // If the context is cancelled, the connection will be immediately terminated.
 // It is suggested that a reasonable timeout is applied to the context.
 // Calling this concurrently with frame writes will result in inconsistent behavior, as frames written concurrently with this may or may not reach the other side.
+// NextFrame must be called when this is running to read the termination of the WebSocket.
 func (c *Conn) Close(ctx context.Context, code uint16, reason string) (err error) {
 	octx := ctx
 	var fcerr error
 	defer func() {
-		if err != nil {
+		switch {
+		case err != nil:
 			select {
 			case <-octx.Done():
 				err = octx.Err()
 			default:
 			}
-		} else {
-			if fcerr != nil {
-				err = fcerr
-			}
+		case fcerr != nil:
+			err = fcerr
 		}
 	}()
 
@@ -874,6 +874,109 @@ func (c *Conn) Close(ctx context.Context, code uint16, reason string) (err error
 	case <-c.closed:
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+
+	return nil
+}
+
+// CloseRead attempts to gracefully close the WebSocket connection, from the read end.
+// The reason string must be no more than 123 characters.
+// If the context is cancelled, the connection will be immediately terminated.
+// It is suggested that a reasonable timeout is applied to the context.
+// Calling this concurrently with frame writes will result in inconsistent behavior, as frames written concurrently with this may or may not reach the other side.
+// NextFrame must not be called while this is running.
+func (c *Conn) CloseRead(ctx context.Context, code uint16, reason string) (err error) {
+	c.readCAD.acquire("read")
+	defer c.readCAD.release("read")
+
+	octx := ctx
+	var fcerr error
+	var rerr error
+	defer func() {
+		switch {
+		case err != nil:
+			select {
+			case <-octx.Done():
+				err = octx.Err()
+			default:
+			}
+		case rerr != nil:
+			err = rerr
+		case fcerr != nil:
+			err = fcerr
+		}
+	}()
+
+	// set up timeout/cancellation
+	ctx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer cancel()
+		for {
+			h, err := readHeader(c.brw)
+			if err != nil {
+				rerr = err
+				return
+			}
+			switch h.opcode {
+			case opText, opBinary, opPing, opContinue:
+				// discard frame
+				_, err := io.CopyN(ioutil.Discard, c.brw, int64(h.length))
+				if err != nil {
+					rerr = err
+					return
+				}
+			case opPong:
+				if h.length > 125 {
+					rerr = errors.New("oversized pong frame")
+					return
+				}
+				buf := make([]byte, h.length)
+				_, err = io.ReadFull(c.brw, buf)
+				if err != nil {
+					rerr = fmt.Errorf("failed to read pong: %s", err)
+					return
+				}
+				n, err := strconv.ParseUint(string(buf), 10, 32)
+				if err != nil {
+					rerr = fmt.Errorf("failed to read pong: %s", err)
+					return
+				}
+				if !atomic.CompareAndSwapUint32(&c.lastPong, uint32(n)-1, uint32(n)) {
+					rerr = fmt.Errorf("failed to process pong: incorrect payload (expected %d but got %d)", atomic.LoadUint32(&c.lastPong)+1, n)
+					return
+				}
+			case opClose:
+				err := c.respClose(h)
+				if err != nil {
+					rerr = err
+					return
+				}
+				return
+			}
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-ctx.Done()
+		fcerr = c.ForceClose()
+	}()
+	defer cancel()
+
+	// send closure message
+	if err := c.writeClose(code, reason); err != nil {
+		return err
+	}
+
+	// wait for response
+	select {
+	case <-c.closed:
+	case <-octx.Done():
+		return octx.Err()
 	}
 
 	return nil
