@@ -889,6 +889,10 @@ func (c *Conn) CloseRead(ctx context.Context, code uint16, reason string) (err e
 	c.readCAD.acquire("read")
 	defer c.readCAD.release("read")
 
+	if c.readLength != 0 || !c.readFrame.fin {
+		return errors.New("attempted to close from read end before completing read of previous frame")
+	}
+
 	octx := ctx
 	var fcerr error
 	var rerr error
