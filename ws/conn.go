@@ -275,6 +275,11 @@ func (c *Conn) startFrame(h header) (err error) {
 		}
 	}()
 	c.writeLock.Lock()
+	if c.closeSent {
+		c.writeLock.Unlock()
+		<-c.closed
+		return ErrAlreadyClosed
+	}
 	err = h.write(c.brw.Writer)
 	if err != nil {
 		c.writeLock.Unlock()
@@ -483,6 +488,10 @@ func (c *Conn) writeControl(h header, dat []byte) error {
 	c.writeLock.Lock()
 	defer c.writeLock.Unlock()
 
+	if c.closeSent {
+		return nil
+	}
+
 	err := h.write(c.brw.Writer)
 	if err != nil {
 		return err
@@ -510,8 +519,23 @@ const (
 )
 
 func (c *Conn) sendPong(h header) error {
+	if h.length > (1 << 16) {
+		// someone is messing with us
+		c.ForceClose()
+		return errors.New("gigantic ping packet")
+	}
+
 	c.writeLock.Lock()
 	defer c.writeLock.Unlock()
+
+	if c.closeSent {
+		// we are not allowed to send more
+		_, err := io.CopyN(ioutil.Discard, c.brw, int64(h.length))
+		if err != nil {
+			return err
+		}
+		return nil
+	}
 
 	err := header{
 		fin:    true,
@@ -525,12 +549,6 @@ func (c *Conn) sendPong(h header) error {
 	}.write(c.brw.Writer)
 	if err != nil {
 		return err
-	}
-
-	if h.length > (1 << 16) {
-		// someone is messing with us
-		c.ForceClose()
-		return errors.New("gigantic ping packet")
 	}
 
 	_, err = io.CopyN(c.brw, c.brw, int64(h.length))
@@ -777,6 +795,12 @@ func (c *Conn) writeClose(code uint16, reason string) error {
 	c.writeLock.Lock()
 	defer c.writeLock.Unlock()
 
+	// only needs to be done once
+	if c.closeSent {
+		return nil
+	}
+	c.closeSent = true
+
 	if len(reason)+2 > 125 {
 		reason = reason[:125-5] + "..."
 	}
@@ -810,10 +834,8 @@ func (c *Conn) writeClose(code uint16, reason string) error {
 // The reason string must be no more than 123 characters.
 // If the context is cancelled, the connection will be immediately terminated.
 // It is suggested that a reasonable timeout is applied to the context.
+// Calling this concurrently with frame writes will result in inconsistent behavior, as frames written concurrently with this may or may not reach the other side.
 func (c *Conn) Close(ctx context.Context, code uint16, reason string) (err error) {
-	c.writeCAD.acquire("write")
-	defer c.writeCAD.release("write")
-
 	octx := ctx
 	var fcerr error
 	defer func() {
