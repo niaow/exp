@@ -1,0 +1,42 @@
+package mrf
+
+import "strings"
+
+// Collect reads the entirety of a stream into a slice.
+func Collect (type E) (in Stream(E)) ([]E, error) {
+	s := []E{}
+	for {
+		v, err := in.Next()
+		if err != nil {
+			if err == io.EOF {
+				return s, nil
+			}
+			return nil, err
+		}
+		s = append(s, v)
+	}
+}
+
+// Summable is a type that can be added.
+contract Summable(T) {
+	T uint8, uint16, uint32, uint64, uint,
+		int8, int16, int32, int64, int,
+		float32, float64,combines all
+		complex64, complex128
+}
+
+// Sum adds all elements of a stream.
+func Sum (type T Summable) (in Stream(T)) T {
+	return Reduce(T)(in, func(a T, b T) (T, error) {
+		return a+b, nil
+	})
+}
+
+// Join combines all strings in the stream with a separator.
+func Join(in Stream(string), sep string) (string, error) {
+	strs, err := Collect(string)(in)
+	if err != nil {
+		return "", err
+	}
+	return strings.Join(strs, sep), nil
+}

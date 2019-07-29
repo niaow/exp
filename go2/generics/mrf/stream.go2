@@ -1,0 +1,61 @@
+package mrf
+
+import "io"
+
+// StreamChannel returns a stream that reads from a channel.
+func StreamChannel (type E) (ch <-chan E) Stream(E) {
+	return streamChannel(E)(ch)
+}
+
+type streamChannel(type E) <-chan E
+
+func (c streamChannel(E)) Next() (E, error) {
+	v, ok := <-c
+	if !ok {
+		var zero E
+		return zero, io.EOF
+	}
+	return v, nil
+}
+
+// StreamSlice returns a stream of data from the slice.
+func StreamSlice (type E) (s []E) Stream(E) {
+	return sliceStream(E)(&s)
+}
+
+type sliceStream(type E) []E
+
+func (s *sliceStream(E)) Next() (E, error) {
+	if len(*s) == 0 {
+		var zero E
+		return zero, io.EOF
+	}
+	v := (*s)[0]
+	*s = (*s)[1:]
+	return v, nil
+}
+
+// Merge returns a stream that reads from all of the input streams from first stream to last stream.
+func Merge (type E) (in ...Stream(E)) Stream(E) {
+	return mergeStream(&in)
+}
+
+type mergeStream(type E) []Stream(E)
+
+func (ms *mergeStream(E)) Next() (E, error) {
+start:
+	if len(*ms) == 0 {
+		var zero E
+		return zero, io.EOF
+	}
+	v, err := (*ms)[0].Next()
+	if err != nil {
+		if err == io.EOF {
+			*ms = (*ms)[1:]
+			goto start
+		}
+		var zero E
+		return zero, err
+	}
+	return v, nil
+}

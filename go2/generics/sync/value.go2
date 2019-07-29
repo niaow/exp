@@ -1,0 +1,48 @@
+package sync
+
+import (
+	"sync/atomic"
+	"unsafe"
+)
+
+type value struct {
+	ptr unsafe.Pointer
+}
+
+func storeVal (type T) (val *value, v *T) {
+	atomic.StorePointer(&val.ptr, v)
+}
+
+func loadVal (type T) (val *value) *T {
+	return (*T)(atomic.LoadPointer(&val.ptr))
+}
+
+// Value is an atomic storage bucket.
+type Value(type T) struct {
+	// stdlib does the same thing, except it uses interface{} instead
+	ptr *T
+}
+
+func (val *Value(T)) value() *value {
+	return (*value)(unsafe.Pointer(val))
+}
+
+// Store places the value into storage, overriding any previous value.
+func (val *Value(T)) Store(v T) {
+	var ptr *T
+	var zero T
+	if v != zero {
+		ptr = &v
+	}
+	storeVal(T)(val.value(), ptr)
+}
+
+// Load loads a value from storage.
+func (val *Value(T)) Load() T {
+	ptr := loadVal(T)(val.value())
+	if ptr == nil {
+		var zero T
+		return zero
+	}
+	return *ptr
+}

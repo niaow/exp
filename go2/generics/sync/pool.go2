@@ -1,0 +1,52 @@
+package sync
+
+import "sync"
+
+// Pool is a mechanism for pooling instances of a type.
+type Pool(type T) interface {
+	// Get returns an instance.
+	Get() T
+
+	// Put returns an instance to the pool.
+	// The instance may or may not be discarded.
+	Put(T)
+}
+
+// FixedPool is a fixed-size Pool implementation.
+type FixedPool(type T) struct {
+	ch chan T
+	chCreate sync.Once
+
+	// Size of the pool, must be set before using the pool.
+	Size uint
+
+	// Callback to create a new instance of the type when none is available.
+	// Defaults to returning the zero value of the type.
+	New func() T
+}
+
+func (p FixedPool(T)) createChan() {
+	p.ch = make(chan T, p.Size)
+}
+
+func (p FixedPool(T)) Get() T {
+	p.chCreate.Do(p.createChan)
+	select {
+	case v := <-p.ch:
+		return v
+	default:
+		if p.New == nil {
+			var zero T
+			return zero
+		}
+		return p.New()
+	}
+}
+
+func (p FixedPool(T)) Put(v T) {
+	p.chCreate.Do(p.createChan)
+	select {
+	case p.ch <- v:
+	default:
+	}
+}

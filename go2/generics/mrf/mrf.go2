@@ -1,0 +1,94 @@
+package mrf
+
+import "io"
+
+// Stream is a continuous sequence of values.
+type Stream(type E) interface {
+	// Get the next value in the stream.
+	// When done, io.EOF signals termination of the stream.
+	Next() (E, error)
+}
+
+type mapRes(type I, O) struct {
+	in Stream(I)
+	op func(I) (O, error)
+}
+
+func (m mapRes(I, O)) Next() (O, error) {
+	i, err := m.in.Next()
+	if err != nil {
+		var zero O
+		return zero, err
+	}
+	o, err := m.op(i)
+	if err != nil {
+		var zero O
+		if err == io.EOF {
+			err = io.ErrUnexpectedEOF
+		}
+		return zero, err
+	}
+	return o, nil
+}
+
+// Map takes a stream and a function, and returns a Stream of values transformed by the function.
+func Map (type I, O) (in Stream(I), fn func(I) (O, error)) Stream(O) {
+	return mapRes(I, O){in, fn}
+}
+
+type filterRes(type E) struct {
+	in Stream(E)
+	op func(E) (bool, error)
+}
+
+func (f filterRes(E)) Next() (E, error) {
+	for {
+		v, err := f.in.Next()
+		if err != nil {
+			var zero E
+			return zero, err
+		}
+		ok, err := f.op(v)
+		if err != nil {
+			var zero E
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			return zero, err
+		}
+		if ok {
+			return v, nil
+		}
+	}
+}
+
+// Filter returns a stream containing only values for which the function returns true.
+func Filter (type E) (in Stream(E), fn func(E) (bool, error)) Stream(E) {
+	return filterRes(E){in, fn}
+}
+
+// Reduce calls the function repeatedly to merge all values in a stream together.
+func Reduce (type E) (in Stream(E), fn func(E, E) (E, error)) (E, error) {
+	var res E
+	first := true
+	for {
+		v, err := in.Next()
+		if err != nil {
+			if err == io.EOF {
+				return res, nil
+			}
+			var zero E
+			return zero, err
+		}
+		if first {
+			res = v
+			continue
+		}
+		red, err := fn(res, v)
+		if err != nil {
+			var zero E
+			return zero, err
+		}
+		res = red
+	}
+}
