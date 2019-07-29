@@ -1,0 +1,48 @@
+package main
+
+import (
+	"fmt"
+	"runtime"
+	"github.com/jadr2ddude/exp/go2/generics/mrf"
+)
+
+func main() {
+	// math:
+	//	A circle of radius 1 can be described by the equation x^2 + y^2 = 1.
+	//	Rearranging, we get y = ±√(1 - x^2).
+	//	The double integral for area is therefore A = ∫(-1, 1)(∫(-√(1 - x^2), √(1 - x^2))(1)dy)dx.
+	//	This can be simplified to A = ∫(0, 1)(4*√(1 - x^2))dx.
+	//	The conventional formula for area is A = π * r^2.
+	//	Plugging in r=1 and substituting, we find that π = ∫(0, 1)(4*√(1 - x^2))dx.
+	//	This code approximates π with a Left Riemann Sum of this integral.
+
+	n := uint32(4000000)
+	chunkSize := uint(10000)
+	dx := 1 / float64(n)
+	pi, err := mrf.ReduceAll(							// merge computation
+		mrf.Map(
+			mrf.SplitChunks(
+				mrf.Seq(uint32)(0, n-1),				// sequence of unscaled x values
+				chunkSize,						// split into chunks of specified size
+			),
+			func(in mrf.Stream(uint32)) (mrf.Stream(float64), error) {
+				return mrf.Map(
+					mrf.Map(in, func(x uint32) (float64, error) {	// scale x values to domain [0, 1)
+						return float64(x)*dx
+					}),
+					func(x float64) (float64, error) {
+						return 4 * math.Sqrt(1 - (x*x)) * dx	// evaluate integrand
+					},
+				)
+			},
+		),
+		uint(runtime.NumCPU()),				// use one goroutine per CPU
+		func(x float64, y float64) (float64, error) {	// reduce by adding
+			return x+y, nil
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("pi = %f\n", pi)
+}

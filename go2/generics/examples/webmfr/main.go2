@@ -1,0 +1,30 @@
+package main
+
+import (
+	"net/http"
+	"github.com/jadr2ddude/exp/go2/generics/util"
+	"github.com/jadr2ddude/exp/go2/generics/mrf"
+)
+
+func add (type T mrf.Summable) (numbers []T) (T, error) {
+	return mrf.Sum(mrf.StreamSlice(numbers))
+}
+
+func handleAdd (type T mrf.Summable) () http.Handler {
+	return util.Handle(add(T))
+}
+
+func main() {
+	http.Handle("/add", handleAdd(int))
+	http.Handle("/addI", handleAdd(int))
+	http.Handle("/addU", handleAdd(uint))
+	http.Handle("/addI8", handleAdd(int8))
+	http.Handle("/addI16", handleAdd(int16))
+	http.Handle("/addI32", handleAdd(int32))
+	http.Handle("/addI64", handleAdd(int64))
+	http.Handle("/addU8", handleAdd(uint8))
+	http.Handle("/addU16", handleAdd(uint16))
+	http.Handle("/addU32", handleAdd(uint32))
+	http.Handle("/addU64", handleAdd(uint64))
+	http.ListenAndServe(":80", nil)
+}

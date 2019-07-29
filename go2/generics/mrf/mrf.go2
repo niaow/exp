@@ -9,9 +9,12 @@ type Stream(type E) interface {
 	Next() (E, error)
 }
 
+// MapFunc is a function type that "maps" a value to a new value.
+type MapFunc(type I, O) func(I) (O, error)
+
 type mapRes(type I, O) struct {
 	in Stream(I)
-	op func(I) (O, error)
+	op MapFunc(I, O)
 }
 
 func (m mapRes(I, O)) Next() (O, error) {
@@ -32,13 +35,17 @@ func (m mapRes(I, O)) Next() (O, error) {
 }
 
 // Map takes a stream and a function, and returns a Stream of values transformed by the function.
-func Map (type I, O) (in Stream(I), fn func(I) (O, error)) Stream(O) {
+func Map (type I, O) (in Stream(I), fn MapFunc(I, O)) Stream(O) {
 	return mapRes(I, O){in, fn}
 }
 
+// FilterFunc is a function that matches a certain set of elements.
+// A return of true is considered a match.
+type FilterFunc(type E) func(E) (bool, error)
+
 type filterRes(type E) struct {
 	in Stream(E)
-	op func(E) (bool, error)
+	op FilterFunc(E)
 }
 
 func (f filterRes(E)) Next() (E, error) {
@@ -62,13 +69,16 @@ func (f filterRes(E)) Next() (E, error) {
 	}
 }
 
-// Filter returns a stream containing only values for which the function returns true.
-func Filter (type E) (in Stream(E), fn func(E) (bool, error)) Stream(E) {
+// Filter returns a stream containing only values matching the FilterFunc.
+func Filter (type E) (in Stream(E), fn FilterFunc(E)) Stream(E) {
 	return filterRes(E){in, fn}
 }
 
+// ReduceFunc is a function type that is used to combine values together.
+type ReduceFunc(type E) func(E, E) (E, error)
+
 // Reduce calls the function repeatedly to merge all values in a stream together.
-func Reduce (type E) (in Stream(E), fn func(E, E) (E, error)) (E, error) {
+func Reduce (type E) (in Stream(E), fn ReduceFunc(E)) (E, error) {
 	var res E
 	first := true
 	for {
