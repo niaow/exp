@@ -26,8 +26,8 @@ contract Summable(T) {
 }
 
 // Sum adds all elements of a stream.
-func Sum (type T Summable) (in Stream(T)) T {
-	return Reduce(T)(in, func(a T, b T) (T, error) {
+func Sum (type E Summable) (in Stream(E)) T {
+	return Reduce(E)(in, func(a E, b E) (E, error) {
 		return a+b, nil
 	})
 }
@@ -39,4 +39,16 @@ func Join(in Stream(string), sep string) (string, error) {
 		return "", err
 	}
 	return strings.Join(strs, sep), nil
+}
+
+// Deduplicate returns a stream containing only unique values from a parent stream.
+func Deduplicate (type E comparable) (in Stream(E)) Stream(E) {
+	m := map[E]struct{}{}
+	return Filter(E)(in, func(v E) (bool, error) {
+		_, dup := m[v]
+		if !dup {
+			m[v] = struct{}{}
+		}
+		return !dup, nil
+	})
 }
