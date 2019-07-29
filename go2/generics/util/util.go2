@@ -8,27 +8,26 @@ import (
 	"io/ioutil"
 )
 
-func Zero(type T)() T {
-	var z T
-	return z
-}
 
-type Factory(type T) interface {
+type Newer(type T) interface {
 	New() T
 }
 
-type factoryFunc func() T
+type newFunc(type T) func() T
 
-func (ff factoryFunc(T)) New() T {
-	return ff()
+func (nf newFunc(T)) New() T {
+	return nf()
 }
 
-func FuncFactory(type T)(fn func() T) Factory(T) {
-	return factoryFunc(fn)
+func FuncNewer(type T)(fn func() T) Newer(T) {
+	return newFunc(T)(fn)
 }
 
-func ZeroFactory(type T)() Factory(T) {
-	return FuncFactory(Zero(T))
+func Zero(type T)() Newer(T) {
+	return FuncNewer(T)(func() T {
+		var z T
+		return z
+	})
 }
 
 func Handle (type I, O) (fn func(I) (O, error)) http.Handler {
