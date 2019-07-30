@@ -49,6 +49,28 @@ func (s *seq(E)) Next() (E, error) {
 	return v, nil
 }
 
+func (s *seq(E)) SubStream(n uint) (Stream(E), error) {
+	switch {
+	case s.v > s.last:
+		return nil, io.EOF
+	case (s.last - s.v) + 1 < n:
+		start := s.v
+		s.v = s.last + 1
+		return &seq(E){
+			v: start,
+			last: s.last,
+		}, io.EOF
+	default:
+		start := s.v
+		s.v += n
+		return &seq(E){
+			v: start,
+			last: s.last - (n + 1),
+		}, nil
+	}
+}
+
+// Seq is a stream of consecutive numbers starting at first and ending at last.
 func Seq (type E Summable) (first E, last E) Stream(E) {
 	return &seq{
 		v: first,
