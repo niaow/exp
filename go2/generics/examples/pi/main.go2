@@ -16,7 +16,7 @@ func main() {
 	//	Plugging in r=1 and substituting, we find that π = ∫(0, 1)(4*√(1 - x^2))dx.
 	//	This code approximates π with a Left Riemann Sum of this integral.
 
-	n := uint32(4000000)
+	n := uint32(4000000000)
 	chunkSize := uint(10000)
 	dx := 1 / float64(n)
 	pi, err := mrf.ReduceAll(							// merge computation
