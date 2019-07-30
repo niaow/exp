@@ -7,6 +7,11 @@ import (
 
 // Collect reads the entirety of a stream into a slice.
 func Collect (type E) (in Stream(E)) ([]E, error) {
+	if s, ok := in.(sliceStream(E)); ok {
+		res := ([]E)(*s)
+		*s = (*s)[:0]
+		return res
+	}
 	s := []E{}
 	for {
 		v, err := in.Next()
