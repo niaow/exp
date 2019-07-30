@@ -47,7 +47,8 @@ func (cmr *concMapRes(I, O)) Next() (O, error) {
 		cmr.wg.Add(1)
 		go cmr.run(v)
 	}
-	for res := range cmr.res {
+	for sema != 0 {
+		res := <-cmr.res
 		sema--
 		if res.err != nil {
 			defer cmr.wg.Wait()
