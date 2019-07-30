@@ -8,23 +8,23 @@ import (
 	"io/ioutil"
 )
 
-
-type Newer(type T) interface {
+// Facotry may also be referred to as "Newer".
+type Factory(type T) interface {
 	New() T
 }
 
-type newFunc(type T) func() T
+type factoryFunc(type T) func() T
 
-func (nf newFunc(T)) New() T {
+func (nf factoryFunc(T)) New() T {
 	return nf()
 }
 
-func FuncNewer(type T)(fn func() T) Newer(T) {
-	return newFunc(T)(fn)
+func FuncFactory(type T)(fn func() T) Factory(T) {
+	return factoryFunc(T)(fn)
 }
 
-func Zero(type T)() Newer(T) {
-	return FuncNewer(T)(func() T {
+func Zero(type T)() Factory(T) {
+	return FuncFactory(T)(func() T {
 		var z T
 		return z
 	})
