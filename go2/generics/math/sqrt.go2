@@ -30,9 +30,9 @@ func SqrtInt (type T Int) (x T) T {
 	switch x.(type) {
 	case uint:
 		if uint64(uint(^uint64(0))) == (^uint64(0)) {
-			return T(Isqrt(uint64)(uint64(x)))
+			return T(SqrtInt(uint64)(uint64(x)))
 		}
-		return T(Isqrt(uint32)(uint32(x)))
+		return T(SqrtInt(uint32)(uint32(x)))
 	case uint8:
 		bit = 1 << (8-1)
 	case uint16:
@@ -42,7 +42,7 @@ func SqrtInt (type T Int) (x T) T {
 	case uint64:
 		bit = 1 << (64-1)
 	case int:
-		return T(Isqrt(int)(int(x)))
+		return T(SqrtInt(uint)(uint(x)))
 	case int8:
 		bit = 1 << (8-2)
 	case int16:
