@@ -1,0 +1,27 @@
+package math
+
+func HypotInt (type T Int) (x T, y T) T {
+	return SqrtInt(T)((x*x) + (y*y))
+}
+
+func HypotFloat (type T Float) (x T, y T) T {
+	switch {
+	case IsInf(T)(x, 0) || IsInf(T)(y, 0):
+		return Inf(T)(1)
+	case IsNaN(x) || IsNaN(y):
+		return NaN(T)()
+	default:
+		return SqrtFloat(T)((x*x) + (y*y))
+	}
+}
+
+func Hypot (type T RegularNumber) (x T, y T) T {
+	switch x.(type) {
+	case float32:
+		return T(HypotFloat(float32)(float32(x), float32(y)))
+	case float64:
+		return T(HypotFloat(float64)(float64(x), float64(y)))
+	default:
+		return Sqrt(T)((x*x) + (y*y))
+	}
+}

@@ -1,0 +1,20 @@
+package math
+
+// ComplexToFloat is a contract for mapping between complex numbers and floating point numbers.
+contract ComplexToFloat(C, F) {
+	Complex(C)
+	Float(F)
+}
+
+func (type C, F ComplexToFloat) Phase(x C) F {
+	return Atan2(F)(F(imag(x)), F(real(x)))
+}
+
+func (type C, F ComplexToFloat) Polar(x C) (r F, θ F) {
+	return AbsComplex(C, F)(x), Phase(C, F)(x)
+}
+
+func (type F, C ComplexToFloat(C, F)) Rect(r F, θ F) C {
+	s, c := Sincos(F)(θ)
+	return C(complex(r*c, r*s))
+}

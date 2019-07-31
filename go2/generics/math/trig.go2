@@ -1,0 +1,167 @@
+package math
+
+import (
+	"math"
+
+	"github.com/chewxy/math32"
+)
+
+func (type T Float) Atan2(x T, y T) T {
+	switch x.(type) {
+	case float64:
+		return T(math.Atan2(float64(x), float64(y)))
+	case float32:
+		return T(math32.Atan2(float32(x), float32(y)))
+	default:
+		panic("unreachable")
+	}
+}
+
+func (type T Float) Sincos(x T) (sin T, cos T) {
+	switch v := x.(type) {
+	case float64:
+		s, c := math.Sincos(v)
+		sin, cos = T(s), T(c)
+	case float32:
+		s, c := math32.Sincos(v)
+		sin, cos = T(s), T(c)
+	default:
+		panic("unreachable")
+	}
+	return sin, cos
+}
+
+
+// generated with https://play.golang.org/p/zoWG3qak325
+
+func Acos (type T Float) (x T) T {
+	switch v := x.(type) {
+	case float64:
+		return T(math.Acos(v))
+	case float32:
+		return T(math32.Acos(v))
+	default:
+		panic("unreachable")
+	}
+}
+
+func Acosh (type T Float) (x T) T {
+	switch v := x.(type) {
+	case float64:
+		return T(math.Acosh(v))
+	case float32:
+		return T(math32.Acosh(v))
+	default:
+		panic("unreachable")
+	}
+}
+
+func Asin (type T Float) (x T) T {
+	switch v := x.(type) {
+	case float64:
+		return T(math.Asin(v))
+	case float32:
+		return T(math32.Asin(v))
+	default:
+		panic("unreachable")
+	}
+}
+
+func Asinh (type T Float) (x T) T {
+	switch v := x.(type) {
+	case float64:
+		return T(math.Asinh(v))
+	case float32:
+		return T(math32.Asinh(v))
+	default:
+		panic("unreachable")
+	}
+}
+
+func Atan (type T Float) (x T) T {
+	switch v := x.(type) {
+	case float64:
+		return T(math.Atan(v))
+	case float32:
+		return T(math32.Atan(v))
+	default:
+		panic("unreachable")
+	}
+}
+
+func Atanh (type T Float) (x T) T {
+	switch v := x.(type) {
+	case float64:
+		return T(math.Atanh(v))
+	case float32:
+		return T(math32.Atanh(v))
+	default:
+		panic("unreachable")
+	}
+}
+
+func Cos (type T Float) (x T) T {
+	switch v := x.(type) {
+	case float64:
+		return T(math.Cos(v))
+	case float32:
+		return T(math32.Cos(v))
+	default:
+		panic("unreachable")
+	}
+}
+
+func Cosh (type T Float) (x T) T {
+	switch v := x.(type) {
+	case float64:
+		return T(math.Cosh(v))
+	case float32:
+		return T(math32.Cosh(v))
+	default:
+		panic("unreachable")
+	}
+}
+
+func Sin (type T Float) (x T) T {
+	switch v := x.(type) {
+	case float64:
+		return T(math.Sin(v))
+	case float32:
+		return T(math32.Sin(v))
+	default:
+		panic("unreachable")
+	}
+}
+
+func Sinh (type T Float) (x T) T {
+	switch v := x.(type) {
+	case float64:
+		return T(math.Sinh(v))
+	case float32:
+		return T(math32.Sinh(v))
+	default:
+		panic("unreachable")
+	}
+}
+
+func Tan (type T Float) (x T) T {
+	switch v := x.(type) {
+	case float64:
+		return T(math.Tan(v))
+	case float32:
+		return T(math32.Tan(v))
+	default:
+		panic("unreachable")
+	}
+}
+
+func Tanh (type T Float) (x T) T {
+	switch v := x.(type) {
+	case float64:
+		return T(math.Tanh(v))
+	case float32:
+		return T(math32.Tanh(v))
+	default:
+		panic("unreachable")
+	}
+}

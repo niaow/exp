@@ -1,0 +1,32 @@
+package math
+
+import "math"
+
+// IsInf returns whether a floating point value is the specified infinity.
+// If sign is zero, it matches either infinity.
+// Otherwise, matches the infinity with the same sign.
+func (type T Float) IsInf(x T, sign int) bool {
+	switch v := x.(type) {
+	case float32:
+		return sign >= 0 && float32(v) > MaxFloat32 || sign <= 0 && float32(v) < -MaxFloat32
+	case float64:
+		return sign >= 0 && float64(v) > MaxFloat64 || sign <= 0 && float64(v) < -MaxFloat64
+	default:
+		panic("unreachable")
+	}
+}
+
+// IsNaN returns whether the given floating point value is a NaN value.
+func (type T Float) IsNaN(x T) bool {
+	return x != x
+}
+
+// Inf returns an infinity with the given sign.
+func (type T Float) Inf(sign int) bool {
+	return T(math.Inf(sign))
+}
+
+// NaN returns a NaN floating point value.
+func (type T Float) NaN() T {
+	return T(math.NaN())
+}

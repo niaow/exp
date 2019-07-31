@@ -1,0 +1,32 @@
+package math
+
+// Float is a contract for floating point types.
+contract Float(T) {
+	T float32, float64
+}
+
+// Int is a contract for integer types.
+contract Int(T) {
+	T uint, uint8, uint16, uint32, uint64,
+		int, int8, int16, int32, int64
+}
+
+// Complex is a contract for a complex number type.
+contract Complex(T) {
+	T complex64, complex128
+}
+
+// Number is a contract for any form of simple number type.
+// This applies to Int or Float, but not Complex.
+contract RegularNumber(T) {
+	T float32, float64,
+		uint, uint8, uint16, uint32, uint64,
+		int, int8, int16, int32, int64
+}
+
+// Number is a contract for any form of number.
+contract Number(T) {
+	T float32, float64, complex64, complex128,
+		uint, uint8, uint16, uint32, uint64,
+		int, int8, int16, int32, int64
+}
