@@ -1,0 +1,85 @@
+package tensor
+
+import "github.com/jadr2ddude/exp/go2/generics/math"
+
+// Vector is a 1-tensor interface.
+// It can satisfy Array(Vector(E), E) or Tensor(Vector(E), E).
+type Vector(type E math.Number) interface {
+	(Interface(E))
+
+	Get(index int) (E, error)
+	Set(index int, val E) error
+}
+
+type arrayVector(type A, E Array) struct {
+	arr A
+	size int
+}
+
+func (av arrayVector(A, E)) Get(index int) (E, error) {
+	return av.arr.Get(index)
+}
+
+func (av arrayVector(A, E)) Set(index int, val E) error {
+	return av.arr.Set(index, val)
+}
+
+func (av arrayVector(A, E)) Shape() Shape {
+	return Shape{av.size}
+}
+
+func (av arrayVector(A, E)) At(index ...int) (E, error) {
+	if len(index) != 1 || index[0] >= av.size {
+		var zero E
+		return zero, ErrWrongDimensions{
+			Shape: Shape{av.size},
+			Index: dup(int)(index),
+		}
+	}
+	v, err := av.arr.Get(index[0])
+	if err != nil {
+		if e, ok := err.(ErrOutOfBounds); ok {
+			var zero E
+			return zero, ErrWrongDimensions{
+				// this indicates there may be a consistency issue
+				Shape: Shape{e.Length},
+				Index: []int{e.Index},
+			}
+		}
+		var zero E
+		return zero, err
+	}
+	return v, nil
+}
+
+func (av arrayVector(A, E)) SetAt(val E, index ...int) error {
+	if len(index) != 1 || index[0] >= av.size {
+		return ErrWrongDimensions{
+			Shape: Shape{av.size},
+			Index: dup(int)(index),
+		}
+	}
+	err := av.arr.Set(index[0], val)
+	if err != nil {
+		if e, ok := err.(ErrOutOfBounds); ok {
+			return ErrWrongDimensions{
+				// this indicates there may be a consistency issue
+				Shape: Shape{e.Length},
+				Index: []int{e.Index},
+			}
+		}
+		return err
+	}
+	return nil
+}
+
+// Flatten returns a vector representation of the dense tensor.
+func (d *Dense(A, E)) Flatten() Vector(E) {
+	if v, ok := d.arr.(Vector(E)); ok {
+		return v
+	}
+	return arrayVector(A, E){
+		arr: d.arr,
+		size: d.shape.Size(),
+	}
+}
