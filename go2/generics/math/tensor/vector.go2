@@ -1,10 +1,8 @@
 package tensor
 
-import "github.com/jadr2ddude/exp/go2/generics/math"
-
 // Vector is a 1-tensor interface.
 // It can satisfy Array(Vector(E), E) or Tensor(Vector(E), E).
-type Vector(type E math.Number) interface {
+type Vector(type E) interface {
 	(Interface(E))
 
 	Get(index int) (E, error)

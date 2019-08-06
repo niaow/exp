@@ -1,7 +1,15 @@
 package tensor
 
+import "github.com/jadr2ddude/exp/go2/generics/math"
+
+// NumberTensor is a contract for a tensor that must use a number type as an element.
+contract NumberTensor(T, E) {
+	Tensor(T, E)
+	math.Number(E)
+}
+
 // ScalarMult scalar-multiplies the tensor by a coefficient.
-func ScalarMult (type T, E Tensor) (tensor T, coefficient E) error {
+func ScalarMult (type T, E NumberTensor) (tensor T, coefficient E) error {
 	switch t := tensor.(type) {
 	case *Dense(Slice(E), E):
 		for i := range t.arr {

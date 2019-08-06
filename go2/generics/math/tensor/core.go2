@@ -4,8 +4,6 @@ import (
 	"strings"
 	"strconv"
 	"fmt"
-
-	"github.com/jadr2ddude/exp/go2/generics/math"
 )
 
 // Shape is the set of shape numbers describing a Tensor.
@@ -74,8 +72,6 @@ func (s Shape) next(index *[]int) bool {
 
 // Tensor is a multidimensional array contract.
 contract Tensor(T, E) {
-	math.Number(E)
-
 	T Shape() Shape
 
 	T At(index ...int) (E, error)
@@ -84,7 +80,7 @@ contract Tensor(T, E) {
 
 // Interface is an interface for any type of tensor.
 // The Tensor contract can always be satisfied as Tensor(Interface(E), E).
-type Interface(type E math.Number) Interface {
+type Interface(type E) Interface {
 	Shape() Shape
 
 	At(index ...int) (E, error)
@@ -93,7 +89,6 @@ type Interface(type E math.Number) Interface {
 
 // Array is a contract for a fixed-size array of size T.
 contract Array(A, T) {
-	math.Number(T)
 	A Get(index int) (T, error)
 	A Set(index int, val T) error
 }
@@ -131,7 +126,7 @@ func (type T) dup(s []T) []T {
 }
 
 // Slice is an implementation of the Array contract using a Go slice.
-type Slice(type T math.Number) []T
+type Slice(type T) []T
 
 func (s Slice(T)) Get(index int) (T, error) {
 	if index >= len(s) {
