@@ -8,11 +8,30 @@ import "math"
 func (type T Float) IsInf(x T, sign int) bool {
 	switch v := x.(type) {
 	case float32:
-		return sign >= 0 && float32(v) > MaxFloat32 || sign <= 0 && float32(v) < -MaxFloat32
+		return sign >= 0 && v > math.MaxFloat32 || sign <= 0 && v < -math.MaxFloat32
 	case float64:
-		return sign >= 0 && float64(v) > MaxFloat64 || sign <= 0 && float64(v) < -MaxFloat64
+		return sign >= 0 && v > math.MaxFloat64 || sign <= 0 && v < -math.MaxFloat64
 	default:
-		panic("unreachable")
+		// slow path
+		switch {
+		case IsNaN(T)(x):
+			return false
+		case sign == 0:
+			// infer sign
+			switch {
+			case x > 0:
+				sign = 1
+			case x < 0:
+				sign = -1
+			default:
+				// zero is not infinity
+				return false
+			}
+			fallthrough
+		default:
+			// compare to appropriate infinity
+			return x == Inf(T)(sign)
+		}
 	}
 }
 

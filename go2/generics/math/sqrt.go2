@@ -15,11 +15,11 @@ func SqrtFloat (type T Float) (x T) T {
 	case float32:
 		return T(math32.Sqrt(v))
 	default:
-		panic("unreachable")
+		return T(SqrtFloat(float64)(float64(x)))
 	}
 }
 
-// Isqrt implements an integer square root operation.
+// SqrtInt implements an integer square root operation.
 // If the input is negative, this will panic.
 func SqrtInt (type T Int) (x T) T {
 	var res T
@@ -52,7 +52,7 @@ func SqrtInt (type T Int) (x T) T {
 	case int64:
 		bit = 1 << (64-2)
 	default:
-		panic("unreachable")
+		return T(SqrtInt(uint64)(uint64(x)))
 	}
 
 	// shamelessly copied from: https://en.wikipedia.org/wiki/Methods_of_computing_square_roots#Example_3
@@ -102,11 +102,34 @@ func Sqrt (type T RegularNumber) (x T) T {
 		return T(SqrtFloat(float32)(v))
 	case float64:
 		return T(SqrtFloat(float64)(v))
-	case complex64:
-		return T(SqrtComplex(complex64)(v))
-	case complex128:
-		return T(SqrtComplex(complex128)(v))
 	default:
-		panic("unreachable")
+		switch reflect.TypeOf(x).Kind() {
+		case reflect.Int:
+			return T(SqrtInt(int)(int(x)))
+		case reflect.Int8:
+			return T(SqrtInt(int8)(int8(x)))
+		case reflect.Int16:
+			return T(SqrtInt(int16)(int16(x)))
+		case reflect.Int32:
+			return T(SqrtInt(int32)(int32(x)))
+		case reflect.Int64:
+			return T(SqrtInt(int64)(int64(x)))
+		case reflect.Uint:
+			return T(SqrtInt(uint)(uint(x)))
+		case reflect.Uint8:
+			return T(SqrtInt(uint8)(uint8(x)))
+		case reflect.Uint16:
+			return T(SqrtInt(uint16)(uint16(x)))
+		case reflect.Uint32:
+			return T(SqrtInt(uint32)(uint32(x)))
+		case reflect.Uint64:
+			return T(SqrtInt(uint64)(uint64(x)))
+		case reflect.Float32:
+			return T(SqrtFloat(float32)(float32(x)))
+		case reflect.Float64:
+			return T(SqrtFloat(float64)(float64(x)))
+		default:
+			panic("bad")
+		}
 	}
 }

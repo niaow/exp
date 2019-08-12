@@ -1,5 +1,7 @@
 package math
 
+import "reflect"
+
 func HypotInt (type T Int) (x T, y T) T {
 	return SqrtInt(T)((x*x) + (y*y))
 }
@@ -21,7 +23,23 @@ func Hypot (type T RegularNumber) (x T, y T) T {
 		return T(HypotFloat(float32)(float32(x), float32(y)))
 	case float64:
 		return T(HypotFloat(float64)(float64(x), float64(y)))
+	case int:
+	case uint:
+	case uint8:
+	case uint16:
+	case uint32:
+	case uint64:
+	case int8:
+	case int16:
+	case int32:
+	case int64:
 	default:
-		return Sqrt(T)((x*x) + (y*y))
+		switch reflect.TypeOf(x).Kind() {
+		case reflect.Float32:
+			return T(HypotFloat(float32)(float32(x), float32(y)))
+		case reflect.Float64:
+			return T(HypotFloat(float64)(float64(x), float64(y)))
+		}
 	}
+	return Sqrt(T)((x*x) + (y*y))
 }

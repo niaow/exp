@@ -5,6 +5,13 @@ import (
 	"github.com/chewxy/math32"
 )
 
+func (type T RegularNumber) simpAbs(x T) T {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
 func (type T Float) AbsFloat(x T) T {
 	switch v := x.(type) {
 	case float64:
@@ -12,15 +19,12 @@ func (type T Float) AbsFloat(x T) T {
 	case float32:
 		return T(math32.Abs(float32(v)))
 	default:
-		panic("unreachable")
+		return simpAbs(T)(x)
 	}
 }
 
 func (type T Int) AbsInt(x T) T {
-	if x < 0 {
-		return -x
-	}
-	return x
+	return simpAbs(T)(x)
 }
 
 func (type T RegularNumber) Abs(x T) T {
