@@ -1,8 +1,6 @@
 package math
 
 import (
-	"reflect"
-
 	"math"
 
 	"github.com/chewxy/math32"
@@ -15,14 +13,7 @@ func (type T Float) Atan2(x T, y T) T {
 	case float32:
 		return T(math32.Atan2(float32(x), float32(y)))
 	default:
-		switch reflect.TypeOf(x).Kind() {
-		case reflect.Float64:
-			return T(math.Atan2(float64(x), float64(y)))
-		case reflect.Float32:
-			return T(math32.Atan2(float32(x), float32(y)))
-		default:
-			panic("bad")
-		}
+		return T(Atan2(float64)(float64(x), float64(y)))
 	}
 }
 
@@ -35,21 +26,13 @@ func (type T Float) Sincos(x T) (sin T, cos T) {
 		s, c := math32.Sincos(v)
 		sin, cos = T(s), T(c)
 	default:
-		switch reflect.TypeOf(x).Kind() {
-		case reflect.Float64:
-			s, c := math.Sincos(v)
-			sin, cos = T(s), T(c)
-		case reflect.Float32:
-			s, c := math32.Sincos(v)
-			sin, cos = T(s), T(c)
-		default:
-			panic("bad")
-		}
+		s, c := Sincos(float64)(float64(x))
+		sin, cos = T(s), T(c)
 	}
 	return sin, cos
 }
 
-// generated with https://play.golang.org/p/9LparVJEoox
+// generated with https://play.golang.org/p/TkI1o9m3mBn
 
 func Acos (type T Float) (x T) T {
 	switch v := x.(type) {
@@ -58,14 +41,7 @@ func Acos (type T Float) (x T) T {
 	case float32:
 		return T(math32.Acos(v))
 	default:
-		switch reflect.TypeOf(x).Kind() {
-		case reflect.Float64:
-			return T(math.Acos(v))
-		case reflect.Float32:
-			return T(math32.Acos(v))
-		default:
-			panic("bad")
-		}
+		return T(Acos(float64)(float64(x)))
 	}
 }
 
@@ -76,14 +52,7 @@ func Acosh (type T Float) (x T) T {
 	case float32:
 		return T(math32.Acosh(v))
 	default:
-		switch reflect.TypeOf(x).Kind() {
-		case reflect.Float64:
-			return T(math.Acosh(v))
-		case reflect.Float32:
-			return T(math32.Acosh(v))
-		default:
-			panic("bad")
-		}
+		return T(Acosh(float64)(float64(x)))
 	}
 }
 
@@ -94,14 +63,7 @@ func Asin (type T Float) (x T) T {
 	case float32:
 		return T(math32.Asin(v))
 	default:
-		switch reflect.TypeOf(x).Kind() {
-		case reflect.Float64:
-			return T(math.Asin(v))
-		case reflect.Float32:
-			return T(math32.Asin(v))
-		default:
-			panic("bad")
-		}
+		return T(Asin(float64)(float64(x)))
 	}
 }
 
@@ -112,14 +74,7 @@ func Asinh (type T Float) (x T) T {
 	case float32:
 		return T(math32.Asinh(v))
 	default:
-		switch reflect.TypeOf(x).Kind() {
-		case reflect.Float64:
-			return T(math.Asinh(v))
-		case reflect.Float32:
-			return T(math32.Asinh(v))
-		default:
-			panic("bad")
-		}
+		return T(Asinh(float64)(float64(x)))
 	}
 }
 
@@ -130,14 +85,7 @@ func Atan (type T Float) (x T) T {
 	case float32:
 		return T(math32.Atan(v))
 	default:
-		switch reflect.TypeOf(x).Kind() {
-		case reflect.Float64:
-			return T(math.Atan(v))
-		case reflect.Float32:
-			return T(math32.Atan(v))
-		default:
-			panic("bad")
-		}
+		return T(Atan(float64)(float64(x)))
 	}
 }
 
@@ -148,14 +96,7 @@ func Atanh (type T Float) (x T) T {
 	case float32:
 		return T(math32.Atanh(v))
 	default:
-		switch reflect.TypeOf(x).Kind() {
-		case reflect.Float64:
-			return T(math.Atanh(v))
-		case reflect.Float32:
-			return T(math32.Atanh(v))
-		default:
-			panic("bad")
-		}
+		return T(Atanh(float64)(float64(x)))
 	}
 }
 
@@ -166,14 +107,7 @@ func Cos (type T Float) (x T) T {
 	case float32:
 		return T(math32.Cos(v))
 	default:
-		switch reflect.TypeOf(x).Kind() {
-		case reflect.Float64:
-			return T(math.Cos(v))
-		case reflect.Float32:
-			return T(math32.Cos(v))
-		default:
-			panic("bad")
-		}
+		return T(Cos(float64)(float64(x)))
 	}
 }
 
@@ -184,14 +118,7 @@ func Cosh (type T Float) (x T) T {
 	case float32:
 		return T(math32.Cosh(v))
 	default:
-		switch reflect.TypeOf(x).Kind() {
-		case reflect.Float64:
-			return T(math.Cosh(v))
-		case reflect.Float32:
-			return T(math32.Cosh(v))
-		default:
-			panic("bad")
-		}
+		return T(Cosh(float64)(float64(x)))
 	}
 }
 
@@ -202,14 +129,7 @@ func Sin (type T Float) (x T) T {
 	case float32:
 		return T(math32.Sin(v))
 	default:
-		switch reflect.TypeOf(x).Kind() {
-		case reflect.Float64:
-			return T(math.Sin(v))
-		case reflect.Float32:
-			return T(math32.Sin(v))
-		default:
-			panic("bad")
-		}
+		return T(Sin(float64)(float64(x)))
 	}
 }
 
@@ -220,14 +140,7 @@ func Sinh (type T Float) (x T) T {
 	case float32:
 		return T(math32.Sinh(v))
 	default:
-		switch reflect.TypeOf(x).Kind() {
-		case reflect.Float64:
-			return T(math.Sinh(v))
-		case reflect.Float32:
-			return T(math32.Sinh(v))
-		default:
-			panic("bad")
-		}
+		return T(Sinh(float64)(float64(x)))
 	}
 }
 
@@ -238,14 +151,7 @@ func Tan (type T Float) (x T) T {
 	case float32:
 		return T(math32.Tan(v))
 	default:
-		switch reflect.TypeOf(x).Kind() {
-		case reflect.Float64:
-			return T(math.Tan(v))
-		case reflect.Float32:
-			return T(math32.Tan(v))
-		default:
-			panic("bad")
-		}
+		return T(Tan(float64)(float64(x)))
 	}
 }
 
@@ -256,13 +162,6 @@ func Tanh (type T Float) (x T) T {
 	case float32:
 		return T(math32.Tanh(v))
 	default:
-		switch reflect.TypeOf(x).Kind() {
-		case reflect.Float64:
-			return T(math.Tanh(v))
-		case reflect.Float32:
-			return T(math32.Tanh(v))
-		default:
-			panic("bad")
-		}
+		return T(Tanh(float64)(float64(x)))
 	}
 }

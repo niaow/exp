@@ -103,33 +103,15 @@ func Sqrt (type T RegularNumber) (x T) T {
 	case float64:
 		return T(SqrtFloat(float64)(v))
 	default:
-		switch reflect.TypeOf(x).Kind() {
-		case reflect.Int:
-			return T(SqrtInt(int)(int(x)))
-		case reflect.Int8:
-			return T(SqrtInt(int8)(int8(x)))
-		case reflect.Int16:
-			return T(SqrtInt(int16)(int16(x)))
-		case reflect.Int32:
-			return T(SqrtInt(int32)(int32(x)))
-		case reflect.Int64:
-			return T(SqrtInt(int64)(int64(x)))
-		case reflect.Uint:
-			return T(SqrtInt(uint)(uint(x)))
-		case reflect.Uint8:
-			return T(SqrtInt(uint8)(uint8(x)))
-		case reflect.Uint16:
-			return T(SqrtInt(uint16)(uint16(x)))
-		case reflect.Uint32:
-			return T(SqrtInt(uint32)(uint32(x)))
-		case reflect.Uint64:
+		nan := NaN(float64)()
+		switch {
+		case T(nan) == T(nan):
+			if x < 0 {
+				return T(SqrtInt(int64)(int64(x)))
+			}
 			return T(SqrtInt(uint64)(uint64(x)))
-		case reflect.Float32:
-			return T(SqrtFloat(float32)(float32(x)))
-		case reflect.Float64:
-			return T(SqrtFloat(float64)(float64(x)))
 		default:
-			panic("bad")
+			return T(SqrtFloat(float64)(float64(x)))
 		}
 	}
 }
