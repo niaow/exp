@@ -32,8 +32,7 @@ func Hypot (type T RegularNumber) (x T, y T) T {
 	case int32:
 	case int64:
 	default:
-		nan := NaN(float64)()
-		if T(nan) != T(nan) {
+		if IsFloat(T)() {
 			return T(HypotFloat(float64)(float64(x), float64(y)))
 		}
 	}

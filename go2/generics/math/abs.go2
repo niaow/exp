@@ -34,10 +34,7 @@ func (type T RegularNumber) Abs(x T) T {
 	case float32:
 		return T(math32.Abs(float32(v)))
 	default:
-		if x < 0 {
-			return -x
-		}
-		return x
+		return simpAbs(T)(x)
 	}
 }
 

@@ -24,6 +24,12 @@ contract RegularNumber(T) {
 		int, int8, int16, int32, int64
 }
 
+// IsFloat returns whether the type parameter is a floating-point number.
+func (type T RegularNumber) IsFloat() {
+	nan := NaN(float64)()
+	return T(nan) != T(nan)
+}
+
 // Number is a contract for any form of number.
 contract Number(T) {
 	T float32, float64, complex64, complex128,

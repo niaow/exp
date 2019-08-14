@@ -103,9 +103,8 @@ func Sqrt (type T RegularNumber) (x T) T {
 	case float64:
 		return T(SqrtFloat(float64)(v))
 	default:
-		nan := NaN(float64)()
 		switch {
-		case T(nan) == T(nan):
+		case IsFloat(T)():
 			if x < 0 {
 				return T(SqrtInt(int64)(int64(x)))
 			}
