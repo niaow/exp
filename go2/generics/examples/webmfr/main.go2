@@ -2,8 +2,8 @@ package main
 
 import (
 	"net/http"
-	"github.com/jadr2ddude/exp/go2/generics/util"
-	"github.com/jadr2ddude/exp/go2/generics/mrf"
+	"github.com/jaddr2line/exp/go2/generics/util"
+	"github.com/jaddr2line/exp/go2/generics/mrf"
 )
 
 func add (type T mrf.Summable) (numbers []T) (T, error) {

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jadr2ddude/exp/ws"
+	"github.com/jaddr2line/exp/ws"
 )
 
 func main() {

@@ -16,7 +16,7 @@ import (
 	"text/scanner"
 	"text/template"
 
-	"github.com/jadr2ddude/exp/conf"
+	"github.com/jaddr2line/exp/conf"
 )
 
 // Type is a. . . type?

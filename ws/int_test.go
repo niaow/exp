@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jadr2ddude/exp/ws"
+	"github.com/jaddr2line/exp/ws"
 )
 
 func TestWebSocket(t *testing.T) {

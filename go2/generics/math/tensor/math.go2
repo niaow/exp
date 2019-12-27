@@ -1,6 +1,6 @@
 package tensor
 
-import "github.com/jadr2ddude/exp/go2/generics/math"
+import "github.com/jaddr2line/exp/go2/generics/math"
 
 // NumberTensor is a contract for a tensor that must use a number type as an element.
 contract NumberTensor(T, E) {
