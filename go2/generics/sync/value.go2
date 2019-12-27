@@ -5,44 +5,48 @@ import (
 	"unsafe"
 )
 
-type value struct {
-	ptr unsafe.Pointer
-}
-
-func storeVal (type T) (val *value, v *T) {
-	atomic.StorePointer(&val.ptr, v)
-}
-
-func loadVal (type T) (val *value) *T {
-	return (*T)(atomic.LoadPointer(&val.ptr))
-}
-
 // Value is an atomic storage bucket.
 type Value(type T) struct {
-	// stdlib does the same thing, except it uses interface{} instead
-	ptr *T
-}
+     // top bit is buffer select, below is write lock, then below is read lock counter
+     state uint32
 
-func (val *Value(T)) value() *value {
-	return (*value)(unsafe.Pointer(val))
+     // two buffers for storing values
+     // one can be read from while the other is written to
+     buffers [2]T
 }
 
 // Store places the value into storage, overriding any previous value.
 func (val *Value(T)) Store(v T) {
-	var ptr *T
-	var zero T
-	if v != zero {
-		ptr = &v
-	}
-	storeVal(T)(val.value(), ptr)
+     // acquire write lock
+     for state := atomic.LoadUint32(&val.state); !atomic.CompareAndSwapUint32(&val.state, state &^ (1 << 30), state | (1 << 30)); state = atomic.LoadUint32(&val.state) {
+         // keep retrying until we have a write lock
+     }
+
+     // get active and inactive buffers
+     active := atomic.LoadUint32(&val.state) >> 31
+     inactive := 1 - active
+
+     // store value into inactive buffer
+     val.buffers[inactive] = v
+
+     // swap buffers when all readers depart and clear the write lock
+     readyState := (active << 31) | (1 << 30)
+     newState := inactive << 31
+     for !atomic.CompareAndSwapUint32(&val.state, readyState, newState) {
+         // not ready yet
+     }
 }
 
 // Load loads a value from storage.
 func (val *Value(T)) Load() T {
-	ptr := loadVal(T)(val.value())
-	if ptr == nil {
-		var zero T
-		return zero
-	}
-	return *ptr
+     // acquire read lock and get buffer
+     buf := atomic.AddUint32(&val.state, 1) & (1 << 31)
+
+     // read value
+     v := val.buffers[buf]
+
+     // release read lock
+     atomic.AddUint32(&val.state, 0xffffffff)
+
+     return v
 }
