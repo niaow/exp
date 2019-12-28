@@ -1,0 +1,66 @@
+package structure
+
+// PriorityQueue is a quque which processes elements in sorted order.
+type PriorityQueue(type E) struct {
+     // Comparator is a function for comparing values on the heap.
+     // Returns true if the first element should be removed after the second element.
+     Comparator func(E, E) bool
+
+     // heap is a binary heap which stores the queue elements.
+     heap []E
+}
+
+type binHeapNode int
+
+func (n binHeapNode) parent() binHeapNode {
+     return (n-1) / 2
+}
+
+func (n binHeapNode) left() binHeapNode {
+     return 2*n + 1
+}
+
+func (n binHeapNode) right() binHeapNode {
+     return 2*n + 2
+}
+
+func (q *PriorityQueue(E)) Push(e E) {
+     // append to heap
+     q.heap = append(q.heap, e)
+
+     // fix heap
+     for n := binHeapNode(len(q.heap)); n != 0 && q.Comparator(q.heap[n.parent()], q.heap[n]); n = n.parent() {
+         q.heap[n], q.heap[n.parent()] = q.heap[n.parent()], q.heap[n]
+     }
+}
+
+func (q *PriorityQueue(E)) Pop() (E, bool) {
+     if len(q.heap) == 0 {
+        var zero E
+        return zero, false
+     }
+
+     // extract value
+     v := q.heap[0]
+
+     // fix heap
+     q.heap[0] = q.heap[len(q.heap)-1]
+     q.heap = q.heap[:len(q.heap)-1]
+     root := binHeapNode(0)
+     for {
+         next := root
+         if q.Comparator(q.heap[root.left()], q.heap[next]) {
+            next = root.left()
+         }
+         if q.Comparator(q.heap[root.right()], q.heap[next]) {
+            next = root.right()
+         }
+
+         if next == root {
+            return v, true
+         }
+
+         q.heap[root], q.heap[next] = q.heap[next], q.heap[root]
+         root = next
+     }
+}
