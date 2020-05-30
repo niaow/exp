@@ -1,0 +1,7 @@
+# github.com/klauspost/cpuid v1.2.5
+## explicit
+github.com/klauspost/cpuid
+# golang.org/x/sys v0.0.0-20200523222454-059865788121
+## explicit
+golang.org/x/sys/internal/unsafeheader
+golang.org/x/sys/unix
