@@ -8,7 +8,7 @@ import (
 
 	gomath "math"
 
-	"github.com/jaddr2line/exp/rpc-gen/example/math"
+	"github.com/niaow/exp/rpc-gen/example/math"
 )
 
 func main() {

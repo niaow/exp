@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"runtime"
-	"github.com/jaddr2line/exp/go2/generics/mrf"
+	"github.com/niaow/exp/go2/generics/mrf"
 )
 
 func add (type T mrf.Summable) (x T, y T) (T, error) {

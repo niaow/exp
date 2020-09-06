@@ -1,4 +1,4 @@
-module github.com/jaddr2line/exp
+module github.com/niaow/exp
 
 go 1.14
 

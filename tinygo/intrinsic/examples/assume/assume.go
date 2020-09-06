@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/jaddr2line/exp/tinygo/intrinsic"
+	"github.com/niaow/exp/tinygo/intrinsic"
 )
 
 func main() {

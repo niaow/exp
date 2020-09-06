@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jaddr2line/exp/ws"
+	"github.com/niaow/exp/ws"
 )
 
 func main() {

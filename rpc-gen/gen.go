@@ -16,7 +16,7 @@ import (
 	"text/scanner"
 	"text/template"
 
-	"github.com/jaddr2line/exp/conf"
+	"github.com/niaow/exp/conf"
 )
 
 // Type is a. . . type?
