@@ -39,7 +39,7 @@ func testPutAndGet(create func() Map) func(*testing.T) {
 		t.Parallel()
 
 		// Generate a bunch of string keys.
-		keys := make([]string, 10000)
+		keys := make([]string, 1000)
 		for i := range keys {
 			keys[i] = strconv.Itoa(i)
 		}
@@ -71,7 +71,7 @@ func testUpdate(create func() Map) func(*testing.T) {
 		t.Parallel()
 
 		// Generate a bunch of string keys.
-		keys := make([]string, 100)
+		keys := make([]string, 1000)
 		for i := range keys {
 			keys[i] = strconv.Itoa(i)
 		}
@@ -114,7 +114,7 @@ func testEach(create func() Map) func(*testing.T) {
 		t.Parallel()
 
 		// Generate a bunch of string keys.
-		keys := make([]string, 10000)
+		keys := make([]string, 1000)
 		for i := range keys {
 			keys[i] = strconv.Itoa(i)
 		}
@@ -152,7 +152,7 @@ func testClear(create func() Map) func(*testing.T) {
 		t.Parallel()
 
 		// Generate a bunch of string keys.
-		keys := make([]string, 10000)
+		keys := make([]string, 1000)
 		for i := range keys {
 			keys[i] = strconv.Itoa(i)
 		}

@@ -3,14 +3,17 @@ package maps
 import (
 	"fmt"
 	"math/bits"
-	_ "unsafe"
 )
 
-const inverseLoad = 8
+// inverseFreeRatio is the inverse of the target ratio of empty slots.
+// When the ratio is exceeded, the map will be grown.
+// Increasing this value will increase the average CPU time spent in freeSlot, but will also increase memory density somewhat.
+const inverseFreeRatio = 8
 
+// MakeScatterChain makes a ScatterChain with capacity for the specified number of elements.
 func MakeScatterChain(size uint) (res ScatterChain) {
 	if size != 0 {
-		size += (size / inverseLoad) + 1
+		size += (size / inverseFreeRatio) + 1
 
 		logSize := bits.Len(size - 1)
 		res.slots = make([]scatterChainSlot, 1<<logSize)
@@ -20,38 +23,79 @@ func MakeScatterChain(size uint) (res ScatterChain) {
 	return
 }
 
+// ScatterChain is a map implementation using a chained scatter table with Brent's invariant (based off of the system used by Lua).
+// The zero value is a ready-to-use empty map.
+// This is somewhat nice in that it uses an exactly-predictable amount of memory for a given maximum capacity.
+// The constant memory overhead is somewhat lower than Go's maps, but the minimum proportional memory overhead is significantly higher.
+// It is more memory-efficient for tiny maps, and less memory-efficient for large maps.
+// This implementation requires an ordered comparator to be defined over the key type.
 type ScatterChain struct {
+	// slots are where the actual data is stored.
+	// An empty slot is represented by the zero value of scatterChainSlot.
+	// The hash of a key is used to map it to a primary slot in this array.
+	// If there are any keys with that primary index, the slot will be marked as a "head", and will contain a linked list of key-value pairs.
+	// Colliding pairs will be stored in otherwise-unused slots.
+	// Brent's invariant differs from a traditional chained scatter in how an insert behaves when the primary index for a new key is previously used by a seperate collision list.
+	// In a traditional scatter table, the new pair would be appended to the other collision list, effectively concatenating them.
+	// In a scatter table with Brent's invariant, the contents of the old slot are instead migrated elsewhere.
+	// This avoids an edge case where all slots form one giant linked list, but complicates iteration a bit when interleaved with insertion or deletion.
+	// In order to provide Go-style iteration semantics, this implementation sorts the collision chains in hash order, followed by key order in case of a full collision.
 	slots []scatterChainSlot
-	n     uint
+
+	// n is the number of key-value pairs currently stored in the map.
+	n uint
+
+	// shift is the downward shift of a hash required to produce a slot index.
+	// This is 64-bits.Len64(len(slots)-1).
 	shift uint
 }
 
 type scatterChainSlot struct {
-	key   string
+	// key is the key of the pair if present.
+	key string
+
+	// value is the currently assigned value corresponding to the key.
 	value interface{}
-	tag   scatterChainTag
+
+	// tag contains all other metadata for the slot.
+	// If the slot is empty, this will be scatterChainEmpty.
+	tag scatterChainTag
 }
 
+// scatterChainTag stores metadata for a slot.
+// It tracks whether a slot is a head, and stores the index of the next slot in the chain (if present).
 type scatterChainTag uintptr
 
 const (
-	scatterChainTagEmpty   scatterChainTag = 0
-	scatterChainTagHead    scatterChainTag = 1
+	// scatterChainTagEmpty is the zero value of a tag.
+	// It indicates that the slot is empty.
+	scatterChainTagEmpty scatterChainTag = 0
+
+	// scatterChainTagHead is a bit flag that indicates that the slot is the head of a collision chain.
+	scatterChainTagHead scatterChainTag = 1
+
+	// scatterChainTagHasNext is a bit flag that indicates that there is another slot in the collision chain.
+	// If set, the index of the next slot is stored in the bits above this.
 	scatterChainTagHasNext scatterChainTag = 2
 )
 
+// next returns the index of the next slot in the chain, if present.
+// If there is no following slot in the chain, this returns false.
 func (t scatterChainTag) next() (uint, bool) {
 	return uint(t >> 2), t&scatterChainTagHasNext != 0
 }
 
+// isHead checks if this slot is a head.
 func (t scatterChainTag) isHead() bool {
 	return t&scatterChainTagHead != 0
 }
 
+// setNext links a slot following this in the chain.
 func (t *scatterChainTag) setNext(idx uint) {
 	*t = (*t & scatterChainTagHead) | scatterChainTagHasNext | scatterChainTag(idx<<2)
 }
 
+// behead downgrades a non-empty slot tag from a head to a regular slot.
 func (t scatterChainTag) behead() scatterChainTag {
 	t &^= scatterChainTagHead
 	if t == scatterChainTagEmpty {
@@ -59,13 +103,6 @@ func (t scatterChainTag) behead() scatterChainTag {
 	}
 
 	return t
-}
-
-func (t *scatterChainTag) unlink() {
-	*t &^= scatterChainTagHasNext
-	if *t == scatterChainTagEmpty {
-		*t = ^(scatterChainTagHasNext | scatterChainTagHead)
-	}
 }
 
 func (t scatterChainTag) String() string {
@@ -222,7 +259,7 @@ func (m *ScatterChain) Get(key string) (interface{}, bool) {
 }
 
 func (m *ScatterChain) Put(key string, value interface{}) {
-	if m.n == uint(len(m.slots)) || uint(len(m.slots))-m.n < uint(len(m.slots))/inverseLoad {
+	if m.n == uint(len(m.slots)) || uint(len(m.slots))-m.n < uint(len(m.slots))/inverseFreeRatio {
 		// Ensure that at least one slot is available for insert, even if we might not use it.
 		// Additionally, apply a constant upper bound to the load factor such that freeSlot does not get extremely slow.
 		// It might be possible to pack a free list by using the space otherwise occupied by key-value pairs (and thus allow for a higher load factor), but that seems a bit complicated.
@@ -260,6 +297,8 @@ func (m *ScatterChain) grow() {
 	// There is a fancier way to do this which skips reallocating indices, but it appears to be slightly slower.
 }
 
+// doPut inserts or updates a key-value pair.
+// This will panic if there is not sufficient available space.
 func (m *ScatterChain) doPut(key string, value interface{}) {
 	hash := strhash(key)
 	idx := uint(hash >> m.shift)
@@ -350,6 +389,8 @@ func (m *ScatterChain) doPut(key string, value interface{}) {
 	m.n++
 }
 
+// freeSlot finds the nearest free slot.
+// If there are no free slots, this will panic.
 func (m *ScatterChain) freeSlot(near uint) uint {
 	for i, j := int(near), near+1; i >= 0 || j < uint(len(m.slots)); {
 		if i >= 0 {
