@@ -424,6 +424,7 @@ func (m *ScatterChain) Delete(key string) {
 
 	if m.slots[idx].key == key {
 		// The key is at the head of the chain.
+		m.n--
 		if next, ok := m.slots[idx].tag.next(); ok {
 			// Move the next pair to the chain head.
 			m.slots[idx] = m.slots[next]
@@ -458,4 +459,6 @@ func (m *ScatterChain) Delete(key string) {
 
 	// Clear the slot.
 	m.slots[idx] = scatterChainSlot{}
+
+	m.n--
 }
